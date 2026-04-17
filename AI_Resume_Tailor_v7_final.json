@@ -1,0 +1,3068 @@
+{
+  "name": "AI Resume Tailor v7 \u2014 LaTeX + pdflatex Sidecar + Qwen Vision",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "AI Resume Tailor",
+        "formDescription": "Upload your resume and provide the job details. We will extract your information automatically.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Resume File",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".tex",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Target Job Title",
+              "placeholder": "e.g. Working Student AI Engineer",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Target Company Name",
+              "placeholder": "e.g. SAP SE",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Job Description",
+              "fieldType": "textarea",
+              "placeholder": "Paste the full job description here...",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e9e84327-3e00-4961-9b40-a5192389a353",
+      "name": "Step 1: Upload Resume & Job Details",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        -4672,
+        496
+      ],
+      "webhookId": "bc61b610-b388-4e57-b4dd-0756700ff6d2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst fileData = item['Resume File'];\nconst fileName = fileData?.name || 'resume';\nconst isTex = fileName.toLowerCase().endsWith('.tex');\nreturn [{\n  json: {\n    jobTitle:     item['Target Job Title']    || '',\n    company:      item['Target Company Name'] || '',\n    jd:           item['Job Description']     || '',\n    fileName,\n    fileType:     isTex ? 'text/x-tex' : (fileData?.mimeType || 'application/pdf'),\n    isTex,\n    timestamp:    new Date().toISOString(),\n    runId:        Math.random().toString(36).substring(2, 10).toUpperCase(),\n    atsThreshold: 75\n  },\n  binary: $input.first().binary\n}];"
+      },
+      "id": "6fbe414e-9033-496f-add8-d6e1ee1e94a6",
+      "name": "Initialise + Store File",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4448,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const binaryData = $input.first().binary || {};\nconst init       = $input.first().json;\n\nconst binaryKey = Object.keys(binaryData).find(k =>\n  k.toLowerCase().includes('resume') ||\n  k.toLowerCase().includes('file') ||\n  k === 'data'\n) || Object.keys(binaryData)[0];\n\nif (!binaryKey || !binaryData[binaryKey]) {\n  throw new Error('No file found. Keys: ' + JSON.stringify(Object.keys(binaryData)));\n}\n\nconst file = binaryData[binaryKey];\nlet base64Data = file.data || '';\nif (base64Data.includes(',')) base64Data = base64Data.split(',')[1];\n\nif (!base64Data || base64Data.length < 10) {\n  throw new Error('File data empty. Check N8N_DEFAULT_BINARY_DATA_MODE=default.');\n}\n\n// For .tex files: decode base64 \u2192 UTF-8 string directly\nconst resumeLatexSource = Buffer.from(base64Data, 'base64').toString('utf8');\n\nreturn [{\n  json: {\n    ...init,\n    base64Data,\n    mimeType: 'text/x-tex',\n    resumeLatexSource\n  }\n}];"
+      },
+      "id": "2e2d44e4-c328-48f2-a3c5-47bfc1c92afc",
+      "name": "Prepare File for Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4240,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer ollama"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._ollamaBody }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "c3fd11b3-1e1c-4543-98a9-a80fef0f6676",
+      "name": "Ollama: Extract Resume Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -4016,
+        496
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "9gVshl2yeUAmiKxE",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst init = $('Initialise + Store File').first().json;\n\nlet extracted = {};\ntry {\n  // Ollama returns OpenAI-compatible format\n  let raw = resp.choices?.[0]?.message?.content || '{}';\n  raw = raw.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  extracted = JSON.parse(raw);\n} catch(e) {\n  extracted = { personal:{}, current_role:{end_date:'Present'}, confidence:{}, missing_fields:[], full_resume_text:'' };\n}\n\nconst p    = extracted.personal      || {};\nconst cr   = extracted.current_role  || {};\nconst conf = extracted.confidence    || {};\nconst missing = extracted.missing_fields || [];\n\n// Also store the original LaTeX source for use in Assemble nodes\nconst resumeLatexSource = $('Prepare File for Extraction').first().json.resumeLatexSource || '';\n\nconst lowConf = Object.entries(conf)\n  .filter(([,v]) => v === 'LOW' || v === 'MEDIUM')\n  .map(([k]) => k);\nconst warningFields = [...new Set([...missing, ...lowConf])];\nconst warningText = warningFields.length > 0\n  ? 'Please check these fields \u2014 extracted with lower confidence: ' + warningFields.join(', ') + '.'\n  : 'All fields extracted. Please review and confirm.';\n\nreturn [{\n  json: {\n    ...init,\n    extracted,\n    resumeLatexSource,\n    ex_name:       p.full_name    || '',\n    ex_email:      p.email        || '',\n    ex_phone:      p.phone        || '',\n    ex_location:   p.location     || '',\n    ex_linkedin:   p.linkedin     || '',\n    ex_github:     p.github       || '',\n    ex_cr_company: cr.company     || '',\n    ex_cr_title:   cr.title       || '',\n    ex_cr_start:   cr.start_date  || '',\n    ex_cr_end:     cr.end_date    || 'Present',\n    resumeText:    extracted.full_resume_text || '',\n    confidence:    conf,\n    missingFields: warningFields,\n    warningFields,\n    warningText\n  }\n}];"
+      },
+      "id": "a588239e-2eb7-4446-9223-f883676550fe",
+      "name": "Parse Extracted Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3792,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Parse Extracted Data').first().json;\n\nconst fullName       = prev.ex_name       || '';\nconst email          = prev.ex_email      || '';\nconst phone          = prev.ex_phone      || '';\nconst location       = prev.ex_location   || '';\nconst linkedin       = prev.ex_linkedin   || '';\nconst github         = prev.ex_github     || '';\nconst currentCompany = prev.ex_cr_company || '';\nconst currentTitle   = prev.ex_cr_title   || '';\nconst currentStart   = prev.ex_cr_start   || '';\nconst currentEnd     = prev.ex_cr_end     || 'Present';\nconst currentDateRange = currentStart + ' -- ' + currentEnd;\n\nconst headerParts = ['\\\\href{mailto:'+email+'}{'+email+'}'];\nif (phone)    headerParts.push(phone);\nif (location) headerParts.push(location);\nif (linkedin) headerParts.push('\\\\href{https://'+linkedin.replace(/^https?:\\/\\//,'')+'}{'+linkedin.replace(/^https?:\\/\\//,'')+'}');\nif (github)   headerParts.push('\\\\href{https://'+github.replace(/^https?:\\/\\//,'')+'}{'+github.replace(/^https?:\\/\\//,'')+'}');\nconst headerContact = headerParts.join(' \\\\quad $\\\\cdot$ \\\\quad ');\nconst safeName = fullName.replace(/&/g,'\\\\&').replace(/%/g,'\\\\%').replace(/#/g,'\\\\#');\n\nlet resumeWithDates = prev.resumeText || '';\nif (prev.ex_cr_end && currentEnd !== prev.ex_cr_end) {\n  resumeWithDates = resumeWithDates.replace(\n    new RegExp(prev.ex_cr_end.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'g'), currentEnd);\n}\nif (prev.ex_cr_title && currentTitle !== prev.ex_cr_title) {\n  resumeWithDates = resumeWithDates.replace(\n    new RegExp(prev.ex_cr_title.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'g'), currentTitle);\n}\nif (prev.ex_cr_company && currentCompany !== prev.ex_cr_company) {\n  resumeWithDates = resumeWithDates.replace(\n    new RegExp(prev.ex_cr_company.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'g'), currentCompany);\n}\n\nreturn [{\n  json: {\n    ...prev,\n    fullName, email, phone, location, linkedin, github,\n    currentCompany, currentTitle, currentStart, currentEnd,\n    currentDateRange, headerContact, safeName,\n    resumeWithDates,\n    warningFields: prev.warningFields || []\n  }\n}];"
+      },
+      "id": "f40e81c9-467f-4327-a18d-b65f92d023a3",
+      "name": "Merge All Confirmed Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3456,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 500,\n  temperature: 0.2,\n  messages: [\n    { role: \"system\", content: `Write ONLY a resume summary paragraph. Plain text, no LaTeX, no labels. 3-4 sentences, 50-80 words. Tailored to the job title and company.\n\nGROUND TRUTH PROTOCOL:\n- Every claim must be directly supported by a fact in the resume\n- Do not upgrade seniority: student/junior work cannot become expert or senior level\n- Do not claim proficiency in tools listed as learning or in progress\n- Do not invent achievements or outcomes not stated\n- Mirror 2-3 JD keywords naturally where the resume genuinely supports them\n- No em-dashes, no buzzwords\n\nOutput ONLY the paragraph.` },\n    { role: \"user\",   content: `CANDIDATE: ${data.fullName}\nJOB: ${data.jobTitle} at ${data.company}\nJD: ${data.jd}\nORIGINAL RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "0b25bc27-84bf-4665-b441-cdea846f9369",
+      "name": "Summary: llama-70b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "dad75989-2d8d-4cb3-ab0e-023cc668aa89",
+      "name": "Summary: llama-70b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        96
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 500,\n  temperature: 0.2,\n  messages: [\n    { role: \"user\", content: `Write ONLY a resume summary paragraph. Plain text, no LaTeX, no labels. 3-4 sentences, 50-80 words. Tailored to the job title and company.\n\nGROUND TRUTH PROTOCOL:\n- Every claim must be directly supported by a fact in the resume\n- Do not upgrade seniority: student/junior work cannot become expert or senior level\n- Do not claim proficiency in tools listed as learning or in progress\n- Do not invent achievements or outcomes not stated\n- Mirror 2-3 JD keywords naturally where the resume genuinely supports them\n- No em-dashes, no buzzwords\n\nOutput ONLY the paragraph.\n\nCANDIDATE: ${data.fullName}\nJOB: ${data.jobTitle} at ${data.company}\nJD: ${data.jd}\nORIGINAL RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "df0e3f9b-8e4f-4239-aa8d-ac34274b5891",
+      "name": "Summary: gemma2-9b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "0c5be840-3da9-4227-8a3f-280d9c3ea2e5",
+      "name": "Summary: gemma2-9b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 500,\n  temperature: 0.2,\n  messages: [\n    { role: \"system\", content: `Write ONLY a resume summary paragraph. Plain text, no LaTeX, no labels. 3-4 sentences, 50-80 words. Tailored to the job title and company.\n\nGROUND TRUTH PROTOCOL:\n- Every claim must be directly supported by a fact in the resume\n- Do not upgrade seniority: student/junior work cannot become expert or senior level\n- Do not claim proficiency in tools listed as learning or in progress\n- Do not invent achievements or outcomes not stated\n- Mirror 2-3 JD keywords naturally where the resume genuinely supports them\n- No em-dashes, no buzzwords\n\nOutput ONLY the paragraph.` },\n    { role: \"user\",   content: `CANDIDATE: ${data.fullName}\nJOB: ${data.jobTitle} at ${data.company}\nJD: ${data.jd}\nORIGINAL RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "771507ef-f7d3-4072-89b9-556b337a3415",
+      "name": "Summary: mixtral-8x7b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "b72747ce-9875-48dd-a086-4c52d3ca89b1",
+      "name": "Summary: mixtral-8x7b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        304
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "f7bebf0f-d79b-40fb-96bb-61b79eb74187",
+      "name": "Summary: gemini-2.0-flash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        400
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.3-70b-versatile\",\n  max_tokens: 1600,\n  temperature: 0.15,\n  messages: [\n    { role: \"system\", content: `Write ONLY the Professional Experience section as raw LaTeX. No preamble.\n\nGROUND TRUTH PROTOCOL:\n- Find exact matching bullet in ORIGINAL RESUME before rewriting\n- Same activity, tool, outcome - only rephrase with JD keywords\n- Never add tools, metrics, or responsibilities not in original\n- Never combine two bullets\n\nFACTUAL LOCKS: preserve ALL employer names, titles, dates.\nMost recent role: ${data.currentCompany} | ${data.currentTitle} | ${data.currentDateRange}` },\n    { role: \"user\",   content: `JOB: ${data.jobTitle} at ${data.company}\nJD: ${data.jd}\nORIGINAL RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "8192c9f4-3b1d-4f93-8346-6e09cc75d876",
+      "name": "Experience: llama-70b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "33f5d18c-022c-4b86-8a74-f0e1aa57bb53",
+      "name": "Experience: llama-70b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        528
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 1600,\n  temperature: 0.15,\n  messages: [\n    { role: \"user\", content: `Write ONLY the Professional Experience section as raw LaTeX. No preamble.\n\nGROUND TRUTH PROTOCOL:\n- Find exact matching bullet in ORIGINAL RESUME before rewriting\n- Same activity, tool, outcome - only rephrase with JD keywords\n- Never add tools, metrics, or responsibilities not in original\n- Never combine two bullets\n\nFACTUAL LOCKS: preserve ALL employer names, titles, dates.\nMost recent role: ${data.currentCompany} | ${data.currentTitle} | ${data.currentDateRange}\n\nJOB: ${data.jobTitle} at ${data.company}\nJD: ${data.jd}\nORIGINAL RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "ac484bf7-b223-49c0-8076-64fc50b55b3b",
+      "name": "Experience: gemma2-9b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "53e1f50c-05b3-49f4-b4fc-39fbf5946139",
+      "name": "Experience: gemma2-9b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        624
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 1600,\n  temperature: 0.15,\n  messages: [\n    { role: \"system\", content: `Write ONLY the Professional Experience section as raw LaTeX. No preamble.\n\nGROUND TRUTH PROTOCOL:\n- Find exact matching bullet in ORIGINAL RESUME before rewriting\n- Same activity, tool, outcome - only rephrase with JD keywords\n- Never add tools, metrics, or responsibilities not in original\n- Never combine two bullets\n\nFACTUAL LOCKS: preserve ALL employer names, titles, dates.\nMost recent role: ${data.currentCompany} | ${data.currentTitle} | ${data.currentDateRange}` },\n    { role: \"user\",   content: `JOB: ${data.jobTitle} at ${data.company}\nJD: ${data.jd}\nORIGINAL RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "6ec97b7c-3577-4485-bc34-d7d0fcbc9324",
+      "name": "Experience: mixtral-8x7b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "72964319-f25d-4ab9-81a5-c2cef950a362",
+      "name": "Experience: mixtral-8x7b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        720
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "21b189ea-1ef3-4137-823b-cd70d7fbcb63",
+      "name": "Experience: gemini-2.0-flash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        816
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.3-70b-versatile\",\n  max_tokens: 900,\n  temperature: 0.15,\n  messages: [\n    { role: \"system\", content: `Reorder ONLY the Skills section as raw LaTeX. No preamble. Only skills from resume - never add. Keep all labels including (in progress). Sort by JD relevance. 2 multicols{3} blocks.` },\n    { role: \"user\",   content: `JD: ${data.jd}\nSKILLS FROM RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "a08e925d-ab8a-4605-b917-25c4263c3d98",
+      "name": "Skills: llama-70b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "3a2bc6fe-9dc2-4773-aa2b-09f02a8a0185",
+      "name": "Skills: llama-70b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        944
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 900,\n  temperature: 0.15,\n  messages: [\n    { role: \"user\", content: `Reorder ONLY the Skills section as raw LaTeX. No preamble. Only skills from resume - never add. Keep all labels including (in progress). Sort by JD relevance. 2 multicols{3} blocks.\n\nJD: ${data.jd}\nSKILLS FROM RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "b1e369da-8b9a-4dc1-bd1f-8ac93b3ae5f6",
+      "name": "Skills: gemma2-9b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "6d9ee9fb-5b5a-461b-ab10-9468ab5971ae",
+      "name": "Skills: gemma2-9b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        1040
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 900,\n  temperature: 0.15,\n  messages: [\n    { role: \"system\", content: `Reorder ONLY the Skills section as raw LaTeX. No preamble. Only skills from resume - never add. Keep all labels including (in progress). Sort by JD relevance. 2 multicols{3} blocks.` },\n    { role: \"user\",   content: `JD: ${data.jd}\nSKILLS FROM RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "8c80e705-6b66-4755-ae25-0b5521af1491",
+      "name": "Skills: mixtral-8x7b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        1136
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "a2b0f6d2-e9e8-42ac-8962-84c594c08c21",
+      "name": "Skills: mixtral-8x7b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        1136
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "dbe26ee6-7bda-4414-aaca-503df273b226",
+      "name": "Skills: gemini-2.0-flash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        1248
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.3-70b-versatile\",\n  max_tokens: 1000,\n  temperature: 0.15,\n  messages: [\n    { role: \"system\", content: `Write ONLY the Projects section as raw LaTeX. No preamble. Select 2-3 most JD-relevant.\n\nGROUND TRUTH PROTOCOL:\n- Every bullet must trace to the original resume\n- Never add metrics, frameworks, or outcomes not stated\n- Preserve exactly: project titles, dates, supervisor names, GitHub links` },\n    { role: \"user\",   content: `JD: ${data.jd}\nORIGINAL RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "0aa845a2-7b90-4e5e-81f8-666e6e44276e",
+      "name": "Projects: llama-70b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        1360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "99fc8ec1-dd19-4e18-8f3c-ec90966400fb",
+      "name": "Projects: llama-70b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        1360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 1000,\n  temperature: 0.15,\n  messages: [\n    { role: \"user\", content: `Write ONLY the Projects section as raw LaTeX. No preamble. Select 2-3 most JD-relevant.\n\nGROUND TRUTH PROTOCOL:\n- Every bullet must trace to the original resume\n- Never add metrics, frameworks, or outcomes not stated\n- Preserve exactly: project titles, dates, supervisor names, GitHub links\n\nJD: ${data.jd}\nORIGINAL RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "d0ba5e98-208e-4cc9-bf1d-bed41f822394",
+      "name": "Projects: gemma2-9b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        1456
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "66598f0d-d368-4864-9d8b-e89b61e08464",
+      "name": "Projects: gemma2-9b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        1456
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 1000,\n  temperature: 0.15,\n  messages: [\n    { role: \"system\", content: `Write ONLY the Projects section as raw LaTeX. No preamble. Select 2-3 most JD-relevant.\n\nGROUND TRUTH PROTOCOL:\n- Every bullet must trace to the original resume\n- Never add metrics, frameworks, or outcomes not stated\n- Preserve exactly: project titles, dates, supervisor names, GitHub links` },\n    { role: \"user\",   content: `JD: ${data.jd}\nORIGINAL RESUME:\n${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "f7e0653c-742e-4012-af2c-ffae506f34e8",
+      "name": "Projects: mixtral-8x7b [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        1568
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "02659b2c-9d11-4c68-b7f0-fc17d628944c",
+      "name": "Projects: mixtral-8x7b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        1568
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 900,\n  temperature: 0.85,\n  messages: [\n    { role: \"user\", content: `Write a cover letter for ${data.fullName} applying for ${data.jobTitle} at ${data.company}.\n\nRules: Human voice, 4 paragraphs, 270-330 words, no salutation, no sign-off.\nP1: Why this role at this company.\nP2: ONE concrete experience from resume matching JD.\nP3: 2-3 specific tools/skills from resume matching JD.\nP4: Availability and call to action.\nEliminate: I am excited to, leverage, passionate about, em-dashes.\n\nJD: ${data.jd}\nRESUME: ${data.resumeWithDates}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "dc5e9518-5757-45ee-8e8a-e806343bd1fc",
+      "name": "Cover Letter: gemini (humanized) [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        1808
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "68481dbf-9e1c-49dd-b1be-be4d23872e30",
+      "name": "Cover Letter: gemini (humanized)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        1808
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function getText(r) {\n  try {\n    if (r.choices)    return r.choices[0].message.content || '';\n    if (r.candidates) return r.candidates[0].content.parts[0].text || '';\n    return '';\n  } catch(e) { return ''; }\n}\nfunction clean(t) { return t.replace(/^```latex\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim(); }\nfunction safeGet(nodeName) {\n  try { return clean(getText($(nodeName).first().json)); }\n  catch(e) { return ''; }\n}\nconst base = $('Merge All Confirmed Data').first().json;\nreturn [{\n  json: {\n    ...base,\n    candidates: {\n      summary:    [safeGet('Summary: llama-70b'),    safeGet('Summary: gemma2-9b'),    safeGet('Summary: mixtral-8x7b'),   safeGet('Summary: gemini-2.0-flash')],\n      experience: [safeGet('Experience: llama-70b'), safeGet('Experience: gemma2-9b'), safeGet('Experience: mixtral-8x7b'), safeGet('Experience: gemini-2.0-flash')],\n      skills:     [safeGet('Skills: llama-70b'),     safeGet('Skills: gemma2-9b'),     safeGet('Skills: mixtral-8x7b'),    safeGet('Skills: gemini-2.0-flash')],\n      projects:   [safeGet('Projects: llama-70b'),   safeGet('Projects: gemma2-9b'),   safeGet('Projects: mixtral-8x7b'),  safeGet('Projects: gemini-2.0-flash')]\n    },\n    coverLetter: clean(getText($('Cover Letter: gemini (humanized)').first().json))\n  }\n}];"
+      },
+      "id": "763b9ee1-0810-45da-98ff-3b381f9a3791",
+      "name": "Collect All Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2368,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 3000,\n  temperature: 0.1,\n  messages: [\n    { role: \"system\", content: `You are a judge synthesising the best resume from 4 model candidates. Accuracy is primary.\n\nFor each bullet: present in original resume? If yes use best phrasing. If added by model - exclude.\n\nFACTUAL LOCKS: Most recent role: ${data.currentCompany} | ${data.currentTitle} | ${data.currentDateRange}\n\nOUTPUT - exactly these XML tags only:\n<SUMMARY>plain text</SUMMARY>\n<EXPERIENCE>raw LaTeX</EXPERIENCE>\n<SKILLS>raw LaTeX</SKILLS>\n<PROJECTS>raw LaTeX</PROJECTS>` },\n    { role: \"user\",   content: `JOB: ${data.jobTitle} at ${data.company}\nJD: ${data.jd}\n\nORIGINAL RESUME:\n${data.resumeWithDates}\n\n=== SUMMARY ===\n[A] ${data.candidates.summary[0]}\n[B] ${data.candidates.summary[1]}\n[C] ${data.candidates.summary[2]}\n[D] ${data.candidates.summary[3]}\n\n=== EXPERIENCE ===\n[A] ${data.candidates.experience[0]}\n[B] ${data.candidates.experience[1]}\n[C] ${data.candidates.experience[2]}\n[D] ${data.candidates.experience[3]}\n\n=== SKILLS ===\n[A] ${data.candidates.skills[0]}\n[B] ${data.candidates.skills[1]}\n[C] ${data.candidates.skills[2]}\n[D] ${data.candidates.skills[3]}\n\n=== PROJECTS ===\n[A] ${data.candidates.projects[0]}\n[B] ${data.candidates.projects[1]}\n[C] ${data.candidates.projects[2]}\n[D] ${data.candidates.projects[3]}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "7efed0e2-125c-4c87-b476-7aafeaf9bc0b",
+      "name": "Judge: Synthesise Best Sections [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2368,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 150000
+        }
+      },
+      "id": "8a7a204c-27b8-4d80-94e1-97663223b168",
+      "name": "Judge: Synthesise Best Sections",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2144,
+        976
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function fix(t) {\n  if (!t) return t;\n  return t.replace(/(?<!\\\\)&(?![a-zA-Z])/g,'\\\\&')\n    .replace(/([^\\\\])%(?![\\s]*$)/gm,'$1\\\\%')\n    .replace(/(?<!\\\\)#(?![a-fA-F0-9]{6}\\b)/g,'\\\\#')\n    .replace(/[\\u2018\\u2019]/g,\"'\")\n    .replace(/[\\u201C\\u201D]/g,'\"')\n    .replace(/\\u2014/g,'---').replace(/\\u2013/g,'--')\n    .replace(/[\\u200B-\\u200D\\uFEFF]/g,'');\n}\nfunction ext(tag, text) {\n  const m = text.match(new RegExp('<'+tag+'>[\\\\s\\\\S]*?</'+tag+'>'));\n  if (!m) return null;\n  return m[0].replace(new RegExp('<'+tag+'>'),'').replace(new RegExp('</'+tag+'>'),'')\n    .replace(/^```latex\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n}\nconst raw  = $input.first().json?.choices?.[0]?.message?.content || '';\nconst data = $('Collect All Candidates').first().json;\nconst sections = {\n  summary:    ext('SUMMARY', raw),\n  experience: fix(ext('EXPERIENCE', raw)),\n  skills:     fix(ext('SKILLS', raw)),\n  projects:   fix(ext('PROJECTS', raw))\n};\nfor (const [k, v] of Object.entries(sections)) {\n  if (!v || v.trim().length < 20) {\n    const fb = data.candidates[k]?.[0] || '';\n    sections[k] = ['experience','skills','projects'].includes(k) ? fix(fb) : fb;\n  }\n}\nreturn [{ json: { ...data, sections } }];"
+      },
+      "id": "6c7268ab-2fbc-4937-980b-5f7478b18887",
+      "name": "Parse Judge Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1936,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const verifyResp = $input.first().json;\nconst judgeData  = $('Parse Judge Output').first().json;\nlet audit = {};\ntry {\n  let raw = verifyResp.choices?.[0]?.message?.content || verifyResp.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  raw = raw.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  audit = JSON.parse(raw);\n} catch(e) {\n  audit = { total_violations: 0, verdict: 'CLEAN', experience_violations: [], project_violations: [], summary_violations: [] };\n}\nconst sections = { ...judgeData.sections };\nconst revertedBullets = [];\nfor (const v of (audit.experience_violations || [])) {\n  if (v.original_bullet && v.original_bullet !== 'null') {\n    const esc = v.synthesised_bullet.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n    const nb  = v.original_bullet.replace(/&/g,'\\\\&').replace(/%/g,'\\\\%');\n    sections.experience = sections.experience.replace(new RegExp(esc,'g'), nb);\n    revertedBullets.push({ section:'experience', type:v.violation_type, reverted:v.synthesised_bullet.substring(0,80) });\n  }\n}\nfor (const v of (audit.project_violations || [])) {\n  if (v.original_text && v.original_text !== 'null') {\n    const esc = v.synthesised_bullet.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n    const nb  = v.original_text.replace(/&/g,'\\\\&').replace(/%/g,'\\\\%');\n    sections.projects = sections.projects.replace(new RegExp(esc,'g'), nb);\n    revertedBullets.push({ section:'projects', type:v.violation_type, reverted:v.synthesised_bullet.substring(0,80) });\n  }\n}\nconst auditHTML = audit.verdict === 'CLEAN'\n  ? \"<div style='background:#d4edda;border:1px solid #28a745;padding:10px;border-radius:6px;margin:8px 0'><strong>Ground truth check passed</strong> \u2014 no hallucinated content detected.</div>\"\n  : \"<div style='background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:6px;margin:8px 0'><strong>\" + audit.total_violations + \" accuracy issue(s) auto-corrected</strong><br/><ul>\" + revertedBullets.map(r=>'<li>['+r.section+'/'+r.type+'] '+r.reverted+'</li>').join('') + \"</ul></div>\";\nreturn [{ json: { ...judgeData, sections, audit, auditHTML, revertedBullets } }];"
+      },
+      "id": "437fe5aa-4bbb-4e51-ab64-36bdfda759b2",
+      "name": "Apply Ground Truth Corrections",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1504,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst base = $('Merge All Confirmed Data').first().json;\nfunction validate(name, content, rules) {\n  const errors=[], warnings=[];\n  if (!content || content.trim().length===0) { errors.push(name+': empty'); return {isValid:false,errors,warnings}; }\n  const ph = content.match(/WRITE_[A-Z_]+|\\[BULLET[^\\]]*\\]|\\[ITEMS[^\\]]*\\]/g);\n  if (ph) errors.push(name+': unfilled placeholders');\n  if (rules.forbidDoc) {\n    if (content.includes('\\\\documentclass')) errors.push(name+': has documentclass');\n    if (content.includes('\\\\begin{document}')) errors.push(name+': has begin document');\n  }\n  if (rules.itemize) {\n    const b=(content.match(/\\\\begin\\{itemize\\}/g)||[]).length;\n    const e=(content.match(/\\\\end\\{itemize\\}/g)||[]).length;\n    if (b===0) errors.push(name+': no itemize');\n    if (b!==e) errors.push(name+': unbalanced itemize ('+b+'/'+e+')');\n  }\n  if (rules.multicols) {\n    const b=(content.match(/\\\\begin\\{multicols\\}/g)||[]).length;\n    const e=(content.match(/\\\\end\\{multicols\\}/g)||[]).length;\n    if (b<2) errors.push(name+': need 2 multicols, found '+b);\n    if (b!==e) errors.push(name+': unbalanced multicols');\n  }\n  if (rules.locks) for (const l of rules.locks) if (!content.includes(l)) warnings.push(name+': lock missing: '+l);\n  const wc = content.split(/\\s+/).length;\n  if (rules.min && wc<rules.min) errors.push(name+': too short ('+wc+')');\n  if (rules.max && wc>rules.max) warnings.push(name+': long ('+wc+')');\n  if (rules.plainText && (content.includes('\\\\begin')||content.includes('\\\\item'))) errors.push(name+': contains LaTeX');\n  return { isValid: errors.length===0, errors, warnings };\n}\nconst V = {\n  summary:    validate('Summary',    data.sections.summary,    {min:20, max:90, plainText:true}),\n  experience: validate('Experience', data.sections.experience, {itemize:true, forbidDoc:true, locks:[base.currentCompany, base.currentDateRange]}),\n  skills:     validate('Skills',     data.sections.skills,     {itemize:true, forbidDoc:true}),\n  projects:   validate('Projects',   data.sections.projects,   {itemize:true, forbidDoc:true})\n};\nconst allErrors      = Object.values(V).flatMap(v=>v.errors);\nconst allWarnings    = Object.values(V).flatMap(v=>v.warnings);\nconst failedSections = Object.entries(V).filter(([,v])=>!v.isValid).map(([k])=>k);\nreturn [{ json: { ...data, validations:V, allErrors, allWarnings, failedSections, allValid:failedSections.length===0 } }];"
+      },
+      "id": "8ca15a98-36e1-4d82-bafd-519bef155723",
+      "name": "Validate All Sections",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1280,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.allValid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "63495a9a-ccab-4ff1-aa41-81d69e649c15",
+      "name": "All Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1056,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 3000,\n  temperature: 0.1,\n  messages: [\n    { role: \"system\", content: `Fix ONLY failed resume sections. Return XML tags only:\n<SUMMARY>...</SUMMARY>\n<EXPERIENCE>...</EXPERIENCE>\n<SKILLS>...</SKILLS>\n<PROJECTS>...</PROJECTS>` },\n    { role: \"user\",   content: `FAILED: ${data.failedSections.join(', ')}\nERRORS: ${data.allErrors.join('\\\\n')}\n[summary] ${data.sections.summary}\n[experience] ${data.sections.experience}\n[skills] ${data.sections.skills}\n[projects] ${data.sections.projects}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "94dbf134-bcb6-44ad-9da7-8eff137fe072",
+      "name": "Repair Failed Sections [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1280,
+        1152
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "1ec08f14-3986-4934-8dc2-26a2385aa145",
+      "name": "Repair Failed Sections",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1056,
+        1152
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw  = $input.first().json?.choices?.[0]?.message?.content || '';\nconst data = $('Validate All Sections').first().json;\nfunction ext(tag,text){const m=text.match(new RegExp('<'+tag+'>[\\\\s\\\\S]*?</'+tag+'>'));return m?m[0].replace(new RegExp('<'+tag+'>'),'').replace(new RegExp('</'+tag+'>'),'').trim():null;}\nconst sections={...data.sections};\nconst tags={summary:'SUMMARY',experience:'EXPERIENCE',skills:'SKILLS',projects:'PROJECTS'};\nconst fixed=[];\nfor(const name of data.failedSections){const r=ext(tags[name],raw);if(r){sections[name]=r;fixed.push(name);}}\nreturn [{json:{...data,sections,repairedSections:fixed,wasRepaired:fixed.length>0}}];"
+      },
+      "id": "e57b1dd4-15cf-4379-b2f2-2aa093c9ba28",
+      "name": "Merge Repairs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -848,
+        1152
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst base = $('Merge All Confirmed Data').first().json;\nconst s = data.sections;\nconst latex = `\\\\documentclass[10pt, a4paper]{article}\n\\\\usepackage[T1]{fontenc}\n\\\\usepackage[utf8]{inputenc}\n\\\\usepackage{lmodern}\n\\\\usepackage[margin=1.8cm, top=1.5cm, bottom=1.5cm]{geometry}\n\\\\usepackage{hyperref}\n\\\\usepackage{xcolor}\n\\\\usepackage{enumitem}\n\\\\usepackage{multicol}\n\\\\usepackage{parskip}\n\\\\usepackage{titlesec}\n\\\\definecolor{accentblue}{HTML}{2B5EAB}\n\\\\hypersetup{colorlinks=true,urlcolor=accentblue,linkcolor=accentblue}\n\\\\titleformat{\\\\section}{\\\\large\\\\bfseries\\\\color{accentblue}}{}{0em}{}[\\\\color{accentblue}\\\\titlerule]\n\\\\titlespacing{\\\\section}{0pt}{8pt}{4pt}\n\\\\setlength{\\\\parindent}{0pt}\n\\\\setlength{\\\\parskip}{2pt}\n\\\\setlist[itemize]{leftmargin=1.2em,itemsep=1pt,parsep=0pt,topsep=2pt,label=\\\\textbullet}\n\\\\begin{document}\n\\\\pagestyle{empty}\n\\\\begin{center}\n{\\\\LARGE\\\\bfseries ${base.safeName}}\\\\\\\\[4pt]\n{\\\\small ${base.headerContact}}\n\\\\end{center}\n\\\\section{Summary}\n${s.summary}\n\\\\section{Professional Experience}\n${s.experience}\n\\\\section{Education}\n${s.education || '% Education: add manually if not extracted'}\n\\\\section{Skills}\n${s.skills}\n\\\\section{Projects}\n${s.projects}\n\\\\end{document}`;\nreturn [{ json: { ...data, latex } }];"
+      },
+      "id": "bf62dac8-3667-4a26-9595-60f73b6a20cd",
+      "name": "Assemble Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -736,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 600,\n  temperature: 0.1,\n  messages: [\n    { role: \"system\", content: `Score resume vs JD. Return ONLY valid JSON:\n{\"score\":<0-100>,\"verdict\":\"<one sentence>\",\"strengths\":[\"...\"],\"gaps\":[\"...\"],\"recommendation\":\"<one sentence>\"}` },\n    { role: \"user\",   content: `JD: ${data.jd}\nSUMMARY: ${data.sections.summary}\nEXPERIENCE: ${data.sections.experience}\nSKILLS: ${data.sections.skills}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "d3308af3-d127-4d6b-a8cf-4a7a93c90e78",
+      "name": "Score vs JD [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -624,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "5490dd22-2747-4d13-9b6e-58f7ddc36504",
+      "name": "Score vs JD",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        768
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._geminiBody }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "c3e0de8e-6139-4759-8c0a-397821717582",
+      "name": "Gemini: ATS Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        944
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "9gVshl2yeUAmiKxE",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://latex-service:3000/compile",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._latexBody }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "63dcea19-d096-4248-9810-3343177fe794",
+      "name": "Render PDF (primary)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -400,
+        1136
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "id": "e19b1f46-034b-4184-acf6-d0d1422aa731"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d71c1a42-d048-401e-bfbc-843517baf00e",
+      "name": "Primary PDF OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -176,
+        1136
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://latex-service:3000/compile",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._latexBody }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "a26dd0d3-1b35-42f6-9eef-8eba72ff3e74",
+      "name": "Render PDF (fallback)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -128,
+        1376
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "id": "c9c2b1cd-8f67-4c24-b55b-1e7417033217"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a2bdaba6-5555-4bba-91fb-5a9f92e7c50b",
+      "name": "Fallback PDF OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        48,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// All 3 inputs arrive via the Wait For All Results merge node\n// Find each result from the merged inputs\nconst items = $input.all();\n\nlet scoreResp = null, atsResp = null, assembled = null, visionAudit = null;\n\nfor (const item of items) {\n  const d = item.json;\n  // Score response has choices array (Groq format)\n  if (d.choices && !scoreResp) scoreResp = d;\n  // ATS response has candidates array (Gemini format)\n  if (d.candidates && !atsResp) atsResp = d;\n  // Assembled doc has latex field\n  if (d.latex && !assembled) assembled = d;\n  // Vision audit result\n  if (d.visionAudit && !visionAudit) visionAudit = d;\n}\n\n// Fallback to node references if not found in inputs\nif (!scoreResp) {\n  try { scoreResp = $('Score vs JD').first().json; } catch(e) { scoreResp = {}; }\n}\nif (!atsResp) {\n  try { atsResp = $('Gemini: ATS Analysis').first().json; } catch(e) { atsResp = {}; }\n}\nif (!assembled) {\n  try { assembled = $('Assemble Document').first().json; } catch(e) { assembled = {}; }\n}\n\nconst base = $('Merge All Confirmed Data').first().json;\n\nlet score = {};\ntry {\n  let r = scoreResp.choices?.[0]?.message?.content || '{}';\n  r = r.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  score = JSON.parse(r);\n} catch(e) { score = { score:'N/A', verdict:'Scoring failed', strengths:[], gaps:[], recommendation:'' }; }\n\nlet ats = {};\ntry {\n  let r = atsResp.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  r = r.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  ats = JSON.parse(r);\n} catch(e) { ats = { ats_score:0, pass_verdict:'ERROR', keyword_match_percent:0, matched_keywords:[], missing_keywords:[], section_breakdown:{}, formatting_flags:[], weak_sections:[], overall_recommendation:'ATS parsing failed.' }; }\n\nconst atsScore = typeof ats.ats_score === 'number' ? ats.ats_score : 0;\nconst threshold = base.atsThreshold || 75;\nconst needsReopt = atsScore < threshold;\n\nconst sectionReport = Object.entries(assembled.validations||{}).map(([n,v]) =>\n  '<li><strong>'+n+'</strong>: '+(v.isValid?'OK':'repaired')+(v.warnings?.length?' ('+v.warnings.join('; ')+')':'')+'</li>'\n).join('');\n\nconst missingRows = (ats.missing_keywords||[]).map(k =>\n  '<tr><td style=\"padding:3px 8px\">'+k.keyword+'</td><td style=\"padding:3px 8px;color:'+(k.importance==='HIGH'?'#c0392b':k.importance==='MEDIUM'?'#e67e22':'#27ae60')+'\">'+k.importance+'</td><td style=\"padding:3px 8px\">'+k.suggested_insertion+'</td></tr>'\n).join('');\n\nconst flagRows = (ats.formatting_flags||[]).map(f =>\n  '<li><strong>['+f.severity+']</strong> '+f.issue+' \u2014 <em>'+f.fix+'</em></li>'\n).join('');\n\nconst sectionAts = Object.entries(ats.section_breakdown||{}).map(([s,d]) =>\n  '<li><strong>'+s+'</strong>: '+d.score+'/100 \u2014 '+d.feedback+'</li>'\n).join('');\n\nconst vc = ats.pass_verdict==='PASS'?'#27ae60':ats.pass_verdict==='FAIL'?'#c0392b':'#e67e22';\n\nconst reoptBanner = needsReopt\n  ? \"<div style='background:#fff3cd;border:1px solid #ffc107;padding:12px;border-radius:6px;margin:16px 0'><strong>ATS score (\"+atsScore+\") below threshold (\"+threshold+\")</strong><br/>Re-optimization running. Second email follows.</div>\"\n  : \"<div style='background:#d4edda;border:1px solid #28a745;padding:12px;border-radius:6px;margin:16px 0'><strong>ATS score (\"+atsScore+\") passed threshold (\"+threshold+\")</strong></div>\";\n\nconst scoreHTML = (assembled.auditHTML||'') + \"<h2>Match Score: \"+score.score+\"/100</h2><p>\"+(score.verdict||'')+\"</p><h3>Strengths</h3><ul>\"+(score.strengths||[]).map(s=>'<li>'+s+'</li>').join('')+\"</ul><h3>Gaps</h3><ul>\"+(score.gaps||[]).map(g=>'<li>'+g+'</li>').join('')+\"</ul><p><strong>Recommendation:</strong> \"+(score.recommendation||'')+\"</p><hr/><h2>ATS Analysis</h2>\"+reoptBanner+\"<table style='border-collapse:collapse'><tr><td style='padding:4px 12px 4px 0'><strong>ATS Score</strong></td><td><strong>\"+ats.ats_score+\"/100</strong></td></tr><tr><td style='padding:4px 12px 4px 0'><strong>Verdict</strong></td><td><span style='color:\"+vc+\";font-weight:bold'>\"+ats.pass_verdict+\"</span></td></tr><tr><td style='padding:4px 12px 4px 0'><strong>Keyword match</strong></td><td>\"+ats.keyword_match_percent+\"%</td></tr></table><h3>Matched keywords</h3><p>\"+((ats.matched_keywords||[]).join(', ')||'None')+\"</p><h3>Missing keywords</h3>\"+(missingRows?\"<table style='border-collapse:collapse;width:100%'><thead><tr><th style='text-align:left;padding:3px 8px;border-bottom:1px solid #ddd'>Keyword</th><th style='text-align:left;padding:3px 8px;border-bottom:1px solid #ddd'>Priority</th><th style='text-align:left;padding:3px 8px;border-bottom:1px solid #ddd'>Where</th></tr></thead><tbody>\"+missingRows+\"</tbody></table>\":\"<p>None</p>\")+\"<h3>Section ATS breakdown</h3><ul>\"+sectionAts+\"</ul><h3>Formatting flags</h3><ul>\"+(flagRows||'<li>None</li>')+\"</ul><p><strong>Recommendation:</strong> \"+(ats.overall_recommendation||'')+\"</p><hr/><h3>Section validation</h3><ul>\"+sectionReport+\"</ul><p style='color:#999;font-size:10px'>Ensemble: llama-3.3-70b + llama-3.1-8b + gemini | Judge: llama-3.3-70b | ATS: gemini</p>\";\n\nreturn [{ json: { ...assembled, score, ats, atsScore, needsReopt, threshold, scoreHTML, coverLetter: assembled.coverLetter } }];"
+      },
+      "id": "81f33b2c-0763-4298-ae3e-bfb97e9e60e6",
+      "name": "Merge Final Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        48,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Merge Final Output').first().json;\nconst base = $('Merge All Confirmed Data').first().json;\nconst fileName = (base.company||'Resume').replace(/\\s+/g,'_') + '_' + (data.runId||'run');\n\n// Build vision audit summary for email\nconst visionHtml = data.visionIssuesHtml || '';\n\nreturn [{\n  json: { \n    ...data, \n    fileName,\n    texFileName: fileName + '.tex',\n    visionHtml\n  }\n}];"
+      },
+      "id": "7bfea6cc-18d7-4473-aafe-bceff169650a",
+      "name": "Prepare Both Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Merge All Confirmed Data').first().json.email }}",
+        "toEmail": "={{ $('Merge All Confirmed Data').first().json.email }}",
+        "subject": "==Resume Ready: {{ $('Merge All Confirmed Data').first().json.jobTitle }} @ {{ $('Merge All Confirmed Data').first().json.company }} [Match: {{ $json.score.score }}/100 | ATS: {{ $json.atsScore }}/100 {{ $json.ats.pass_verdict }}]\n",
+        "options": {}
+      },
+      "id": "375e685c-3ec1-40e3-9c02-240e3deb0d1c",
+      "name": "Email: PDF + TEX + Score + ATS",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        496,
+        832
+      ],
+      "webhookId": "b10f0566-63ee-4a73-84c0-04289efbf8ea",
+      "credentials": {
+        "smtp": {
+          "id": "oxLyP4vqkNAJFmXe",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needsReopt }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "id": "d91875e3-30e8-4643-b1f0-826fa8e1dcca"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4f21b404-c79f-4480-a62a-061d2b606e38",
+      "name": "ATS Below Threshold?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        624,
+        1152
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._geminiBody }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "bde748e0-c566-4d82-b304-fa4370f88285",
+      "name": "Gemini: ATS Fix Plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        944
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "9gVshl2yeUAmiKxE",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const planResp = $input.first().json;\nconst data = $('Merge Final Output').first().json;\nlet plan = {};\ntry {\n  let r = planResp.candidates[0].content.parts[0].text || '{}';\n  r = r.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  plan = JSON.parse(r);\n} catch(e) { plan = { priority_sections:['summary','experience'], section_fixes:{}, estimated_score_after_fixes:80 }; }\nconst rows = Object.entries(plan.section_fixes||{}).map(([s,f]) => {\n  if (!f.needs_rewrite) return '<li><strong>'+s+'</strong>: no rewrite needed</li>';\n  return '<li><strong>'+s+'</strong>:<ul>'+(f.specific_changes||[]).map(c=>'<li>'+c+'</li>').join('')+'</ul>'+((f.keywords_to_add||[]).length?'<em>Add: '+f.keywords_to_add.join(', ')+'</em>':'')+'</li>';\n}).join('');\nconst planHTML = '<h2>ATS Re-Optimization Plan</h2><p>Current: <strong>'+data.atsScore+'/100</strong> | Estimated: <strong>'+plan.estimated_score_after_fixes+'/100</strong></p><ul>'+rows+'</ul>';\nreturn [{ json: { ...data, atsPlan:plan, planHTML } }];"
+      },
+      "id": "fb2dc905-57ca-428b-9f4c-f3dddaabde3c",
+      "name": "Parse ATS Fix Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        928,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 5000,\n  temperature: 0.15,\n  messages: [\n    { role: \"system\", content: `Re-synthesise only failed ATS sections using fix plan. Never change employer names, titles, dates. Output only tags for needs_rewrite=true:\n<SUMMARY>...</SUMMARY>\n<EXPERIENCE>...</EXPERIENCE>\n<SKILLS>...</SKILLS>\n<PROJECTS>...</PROJECTS>` },\n    { role: \"user\",   content: `FIX PLAN: ${JSON.stringify(data.atsPlan.section_fixes)}\nJD: ${data.jd}\n[summary] ${data.sections.summary}\n[experience] ${data.sections.experience}\n[skills] ${data.sections.skills}\n[projects] ${data.sections.projects}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "15e78ce0-675a-41f1-bd5f-c0cfd9d667e6",
+      "name": "Re-Optimize Weak Sections [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "047ff990-71b7-48f1-8207-d507d61ccddc",
+      "name": "Re-Optimize Weak Sections",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1312,
+        912
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function fix(t){if(!t)return t;return t.replace(/(?<!\\\\)&(?![a-zA-Z])/g,'\\\\&').replace(/([^\\\\])%(?![\\s]*$)/gm,'$1\\\\%').replace(/[\\u2018\\u2019]/g,\"'\").replace(/[\\u201C\\u201D]/g,'\"').replace(/\\u2014/g,'---').replace(/\\u2013/g,'--').replace(/[\\u200B-\\u200D\\uFEFF]/g,'');}\nfunction ext(tag,text){const m=text.match(new RegExp('<'+tag+'>[\\\\s\\\\S]*?</'+tag+'>'));return m?m[0].replace(new RegExp('<'+tag+'>'),'').replace(new RegExp('</'+tag+'>'),'').replace(/^```latex\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim():null;}\nconst raw=($input.first().json?.choices?.[0]?.message?.content)||'';\nconst data=$('Parse ATS Fix Plan').first().json;\nconst sections={...data.sections};\nconst fixes=data.atsPlan?.section_fixes||{};\nconst improved=[];\nfor(const[name,f]of Object.entries(fixes)){\n  if(f.needs_rewrite){\n    const tags={summary:'SUMMARY',experience:'EXPERIENCE',skills:'SKILLS',projects:'PROJECTS'};\n    const r=ext(tags[name],raw);\n    if(r&&r.length>20){sections[name]=['experience','skills','projects'].includes(name)?fix(r):r;improved.push(name);}\n  }\n}\nreturn [{json:{...data,sections,improvedSections:improved}}];"
+      },
+      "id": "066cd90d-3979-4b72-8c34-bbfada2e6b57",
+      "name": "Merge Re-Optimized Sections",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst base = $('Merge All Confirmed Data').first().json;\nconst s = data.sections;\nconst latexOptimized = `\\\\documentclass[10pt, a4paper]{article}\n\\\\usepackage[T1]{fontenc}\n\\\\usepackage[utf8]{inputenc}\n\\\\usepackage{lmodern}\n\\\\usepackage[margin=1.8cm, top=1.5cm, bottom=1.5cm]{geometry}\n\\\\usepackage{hyperref}\n\\\\usepackage{xcolor}\n\\\\usepackage{enumitem}\n\\\\usepackage{multicol}\n\\\\usepackage{parskip}\n\\\\usepackage{titlesec}\n\\\\definecolor{accentblue}{HTML}{2B5EAB}\n\\\\hypersetup{colorlinks=true,urlcolor=accentblue,linkcolor=accentblue}\n\\\\titleformat{\\\\section}{\\\\large\\\\bfseries\\\\color{accentblue}}{}{0em}{}[\\\\color{accentblue}\\\\titlerule]\n\\\\titlespacing{\\\\section}{0pt}{8pt}{4pt}\n\\\\setlength{\\\\parindent}{0pt}\n\\\\setlength{\\\\parskip}{2pt}\n\\\\setlist[itemize]{leftmargin=1.2em,itemsep=1pt,parsep=0pt,topsep=2pt,label=\\\\textbullet}\n\\\\begin{document}\n\\\\pagestyle{empty}\n\\\\begin{center}\n{\\\\LARGE\\\\bfseries ${base.safeName}}\\\\\\\\[4pt]\n{\\\\small ${base.headerContact}}\n\\\\end{center}\n\\\\section{Summary}\n${s.summary}\n\\\\section{Professional Experience}\n${s.experience}\n\\\\section{Education}\n${s.education || '% Education: add manually if not extracted'}\n\\\\section{Skills}\n${s.skills}\n\\\\section{Projects}\n${s.projects}\n\\\\end{document}`;\nreturn [{ json: { ...data, latexOptimized: latexOptimized } }];"
+      },
+      "id": "7267a3b8-af13-4a21-b3a2-41308a25c8bf",
+      "name": "Assemble Optimized Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://latex-service:3000/compile",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._latexBody }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "43a63b0f-9229-4625-a5ef-4189d5de88d8",
+      "name": "Render Optimized PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2100,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Assemble Optimized Document').first().json;\nconst base = $('Merge All Confirmed Data').first().json;\nconst fileName = (base.company||'Resume').replace(/\\s+/g,'_') + '_' + data.runId + '_ATS_v2';\nconst texB64 = Buffer.from(data.latexOptimized,'utf8').toString('base64');\nreturn [{\n  json: { ...data, fileNameOpt: fileName },\n  binary: {\n    resumeTexOpt: { data: texB64, mimeType: 'application/x-tex', fileName: fileName+'.tex' }\n  }\n}];"
+      },
+      "id": "ae7efa9d-8fd6-4bd5-b7fd-04d727fc2abe",
+      "name": "Prepare Optimized Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Merge All Confirmed Data').first().json.email }}",
+        "toEmail": "={{ $('Merge All Confirmed Data').first().json.email }}",
+        "subject": "=ATS-Optimized Resume v2: {{ $('Merge JD').first().json.jobTitle }} @ {{ $('Merge JD').first().json.company }}",
+        "options": {}
+      },
+      "id": "b22fead0-bd80-4c69-909a-85c2c19b5d30",
+      "name": "Email: Optimized PDF v2 + TEX",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2416,
+        912
+      ],
+      "webhookId": "9704ff0d-de7a-4141-b10b-b4d83ccb65e3",
+      "credentials": {
+        "smtp": {
+          "id": "oxLyP4vqkNAJFmXe",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Merge All Confirmed Data').first().json.email }}",
+        "toEmail": "={{ $('Merge All Confirmed Data').first().json.email }}",
+        "subject": "==PDF Render Failed \u2014 LaTeX Fallback [{{ $('Merge All Confirmed Data').first().json.jobTitle }}]",
+        "options": {}
+      },
+      "id": "8934dd7e-bcde-4d06-adbb-aba30ca83d98",
+      "name": "Email: LaTeX Fallback",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        288,
+        1408
+      ],
+      "webhookId": "d3bf5f9c-0736-4c65-9d0b-2db68d182b3f",
+      "credentials": {
+        "smtp": {
+          "id": "oxLyP4vqkNAJFmXe",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst prompt = `Write ONLY a resume summary paragraph. Plain text, no LaTeX. 3-4 sentences, 50-80 words. Ground truth: only facts from resume. No buzzwords. JD: ${data.jd}\nRESUME:\n${data.resumeWithDates}`;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 500,\n  temperature: 0.2,\n  messages: [{ role: 'user', content: prompt }]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "b72f9740-6338-417c-9321-8c5135ef039b",
+      "name": "Summary: gemini-2.0-flash [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst prompt = `Write ONLY Professional Experience as raw LaTeX. No preamble. Every bullet must trace to original resume. Preserve all employer names, titles, dates. JD: ${data.jd}\nMOST RECENT ROLE: ${data.currentCompany} | ${data.currentTitle} | ${data.currentDateRange}\nRESUME:\n${data.resumeWithDates}`;\nconst body = {\n  model: \"llama-3.3-70b-versatile\",\n  max_tokens: 1600,\n  temperature: 0.15,\n  messages: [{ role: 'user', content: prompt }]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "11fd6824-f3c7-40cc-a00b-76b7d4be5cc3",
+      "name": "Experience: gemini-2.0-flash [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        816
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst prompt = `Reorder ONLY Skills section as raw LaTeX. Only skills from resume, never add. Sort by JD relevance. 2 multicols{3} blocks. JD: ${data.jd}\nRESUME:\n${data.resumeWithDates}`;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 900,\n  temperature: 0.15,\n  messages: [{ role: 'user', content: prompt }]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "c56d716f-2d2a-47f2-8a0b-0a72053cf672",
+      "name": "Skills: gemini-2.0-flash [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        1248
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst prompt = `Write ONLY Projects section as raw LaTeX. 2-3 most JD-relevant. Every bullet traces to original. Never add metrics or frameworks not stated. JD: ${data.jd}\nRESUME:\n${data.resumeWithDates}`;\nconst body = {\n  model: \"llama-3.3-70b-versatile\",\n  max_tokens: 1000,\n  temperature: 0.15,\n  messages: [{ role: 'user', content: prompt }]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "21cab177-fa4e-47b2-9a75-b5663f187e55",
+      "name": "Projects: gemini-2.0-flash [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        1664
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst prompt = `You are a resume accuracy auditor. Compare SYNTHESISED sections against ORIGINAL RESUME and identify hallucinated content.\n\nReturn ONLY valid JSON (no markdown):\n{\"experience_violations\":[{\"synthesised_bullet\":\"\",\"violation_type\":\"added_tool\",\"explanation\":\"\",\"original_bullet\":\"\"}],\"project_violations\":[{\"synthesised_bullet\":\"\",\"violation_type\":\"added_tool\",\"explanation\":\"\",\"original_text\":\"\"}],\"summary_violations\":[],\"total_violations\":0,\"verdict\":\"CLEAN\"}\n\nDO NOT flag: rephrasing, reordering, JD vocabulary for same concept.\nDO flag: tools not in original, metrics not in original, inflated outcomes.\n\nORIGINAL RESUME:\n${data.resumeWithDates}\n\nSYNTHESISED EXPERIENCE:\n${data.sections.experience}\n\nSYNTHESISED PROJECTS:\n${data.sections.projects}\n\nSYNTHESISED SUMMARY:\n${data.sections.summary}`;\nconst body = {\n  model: \"llama-3.1-8b-instant\",\n  max_tokens: 2000,\n  temperature: 0.0,\n  messages: [{ role: 'user', content: prompt }]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+      },
+      "id": "5bacbba5-cd87-4449-82f7-f2515bee7c99",
+      "name": "Gemini: Ground Truth Verification [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1920,
+        1072
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst prompt = `ATS expert analysis. Return ONLY valid JSON (no markdown):\n{\"ats_score\":0,\"pass_verdict\":\"PASS\",\"keyword_match_percent\":0,\"matched_keywords\":[],\"missing_keywords\":[{\"keyword\":\"\",\"importance\":\"HIGH\",\"suggested_insertion\":\"\"}],\"section_breakdown\":{\"summary\":{\"score\":0,\"feedback\":\"\"},\"experience\":{\"score\":0,\"feedback\":\"\"},\"skills\":{\"score\":0,\"feedback\":\"\"},\"projects\":{\"score\":0,\"feedback\":\"\"}},\"formatting_flags\":[{\"issue\":\"\",\"severity\":\"HIGH\",\"fix\":\"\"}],\"weak_sections\":[],\"overall_recommendation\":\"\"}\n\nJD: ${data.jd}\nSUMMARY: ${data.sections.summary}\nEXPERIENCE: ${data.sections.experience}\nSKILLS: ${data.sections.skills}\nPROJECTS: ${data.sections.projects}`;\nconst body = {\n  contents: [{ parts: [{ text: prompt }] }],\n  generationConfig: { temperature: 0.1, maxOutputTokens: 2000 }\n};\nreturn [{ json: { ...data, _geminiBody: JSON.stringify(body) } }];"
+      },
+      "id": "d971119b-b66a-4d04-a4b2-b5a049b2972a",
+      "name": "Gemini: ATS Analysis [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "121c5442-afae-4634-a2c7-9c5df03c8aee",
+      "name": "Projects: gemini-2.0-flash",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2672,
+        1664
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst prompt = `ATS fix plan. Return ONLY valid JSON (no markdown):\n{\"priority_sections\":[],\"section_fixes\":{\"summary\":{\"needs_rewrite\":false,\"specific_changes\":[],\"keywords_to_add\":[]},\"experience\":{\"needs_rewrite\":false,\"specific_changes\":[],\"keywords_to_add\":[]},\"skills\":{\"needs_rewrite\":false,\"specific_changes\":[],\"keywords_to_add\":[]},\"projects\":{\"needs_rewrite\":false,\"specific_changes\":[],\"keywords_to_add\":[]}},\"estimated_score_after_fixes\":80}\n\nResume scored ${data.atsScore}/100.\nJD: ${data.jd}\nSUMMARY: ${data.sections.summary}\nEXPERIENCE: ${data.sections.experience}\nSKILLS: ${data.sections.skills}\nPROJECTS: ${data.sections.projects}`;\nconst body = {\n  contents: [{ parts: [{ text: prompt }] }],\n  generationConfig: { temperature: 0.1, maxOutputTokens: 2000 }\n};\nreturn [{ json: { ...data, _geminiBody: JSON.stringify(body) } }];"
+      },
+      "id": "dde69883-54dc-4357-b046-834cc64d1792",
+      "name": "Gemini: ATS Fix Plan [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        496,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst latex = (data.latex || '').replace(/\\\\\\\\n/g, '\\\\n');\nif (!latex || latex.trim().length < 20) throw new Error('latex field is empty.');\nconst body = { latex };\nreturn [{ json: { ...data, _latexBody: JSON.stringify(body) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        1376
+      ],
+      "id": "cfb83d3c-6be8-4ef6-9386-ff02773b52ac",
+      "name": "Render PDF: Prepare Command"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst latex = (data.latex || '').replace(/\\\\\\\\n/g, '\\\\n');\nif (!latex || latex.trim().length < 20) throw new Error('latex field is empty.');\nconst body = { latex };\nreturn [{ json: { ...data, _latexBody: JSON.stringify(body) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -288,
+        1344
+      ],
+      "id": "05683429-2275-4aa8-a338-dacb867bdfa8",
+      "name": "Render PDF Fallback: Prepare Command"
+    },
+    {
+      "parameters": {},
+      "id": "f500f357-3eb4-44b6-81f3-9ceda45e59bf",
+      "name": "Wait For All Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -176,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._groqBody }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "68c19cec-25e6-4396-937c-1dd0d4847447",
+      "name": "groq: Ground Truth Verification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1728,
+        944
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KiaQQV4PKVBqLXZK",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "id": "b5b91ce5-8362-429d-a88b-0f4ff1265e36",
+      "name": "Extract Resume Data [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4016,
+        380
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"qwen2.5:14b-instruct-q4_K_M\",\n  stream: false,\n  messages: [\n    {\n      role: \"system\",\n      content: `Extract ALL information from this LaTeX resume. Return ONLY valid JSON, no markdown fences:\n{\n  \"personal\": {\"full_name\":null,\"email\":null,\"phone\":null,\"location\":null,\"linkedin\":null,\"github\":null},\n  \"current_role\": {\"company\":null,\"title\":null,\"start_date\":null,\"end_date\":null,\"is_current\":true},\n  \"confidence\": {\"full_name\":\"HIGH\",\"email\":\"HIGH\",\"phone\":\"HIGH\",\"location\":\"HIGH\",\"linkedin\":\"HIGH\",\"github\":\"HIGH\",\"current_role\":\"HIGH\"},\n  \"missing_fields\": [],\n  \"full_resume_text\": \"<complete plain text of entire resume, all sections and bullets>\"\n}`\n    },\n    {\n      role: \"user\",\n      content: `LATEX RESUME SOURCE:\\n${data.resumeLatexSource}`\n    }\n  ]\n};\nreturn [{ json: { ...data, _ollamaBody: JSON.stringify(body) } }];"
+      }
+    },
+    {
+      "id": "9bd8c019-bf4c-487b-ab0d-931942d873a9",
+      "name": "Render Opt PDF: Prepare Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1870,
+        912
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst latex = (data.latexOptimized || '').replace(/\\\\\\\\n/g, '\\\\n');\nif (!latex || latex.trim().length < 20) throw new Error('latexOptimized field is empty.');\nconst body = { latex };\nreturn [{ json: { ...data, _latexBody: JSON.stringify(body) } }];"
+      }
+    },
+    {
+      "id": "61a4453d-1af3-4567-8516-08ff653e2c48",
+      "name": "Parse PDF Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -176,
+        1136
+      ],
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst data = $('Render PDF: Prepare Command').first().json;\n\nif (!resp.success) {\n  throw new Error('LaTeX compile failed: ' + (resp.error || 'unknown error'));\n}\n\nconst pdfBase64 = resp.pdfBase64 || '';\nif (!pdfBase64 || pdfBase64.length < 100) {\n  throw new Error('Sidecar returned empty PDF. Log: ' + (resp.log || '').substring(0, 500));\n}\n\nreturn [{\n  json: { ...data, mimeType: 'application/pdf', latexLog: resp.log || '' },\n  binary: {\n    resumePdf: {\n      data: pdfBase64,\n      mimeType: 'application/pdf',\n      fileName: (data.runId || 'resume') + '.pdf'\n    }\n  }\n}];"
+      }
+    },
+    {
+      "id": "f4842cf2-5bac-45e9-8bb3-56dd95f5d961",
+      "name": "Parse Optimized PDF Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2300,
+        912
+      ],
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst data = $('Render Opt PDF: Prepare Command').first().json;\n\nif (!resp.success) {\n  throw new Error('LaTeX compile failed (optimized): ' + (resp.error || 'unknown error'));\n}\n\nconst pdfBase64 = resp.pdfBase64 || '';\nif (!pdfBase64 || pdfBase64.length < 100) {\n  throw new Error('Sidecar returned empty PDF (optimized). Log: ' + (resp.log || '').substring(0, 500));\n}\n\nreturn [{\n  json: { ...data, mimeType: 'application/pdf', latexLogOpt: resp.log || '' },\n  binary: {\n    resumePdfOpt: {\n      data: pdfBase64,\n      mimeType: 'application/pdf',\n      fileName: (data.runId || 'resume') + '_ATS_v2.pdf'\n    }\n  }\n}];"
+      }
+    },
+    {
+      "id": "46f3567b-0be2-4bdf-a6ec-7e230c06efe3",
+      "name": "Vision Validate: Resume [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        1136
+      ],
+      "parameters": {
+        "jsCode": "const binaryData = $input.first().binary || {};\nconst data = $input.first().json;\n\n// Get PDF base64 from binary\nconst pdfKey = Object.keys(binaryData).find(k => k.toLowerCase().includes('pdf')) || Object.keys(binaryData)[0];\nconst pdfBase64 = binaryData[pdfKey]?.data || '';\n\nif (!pdfBase64 || pdfBase64.length < 100) {\n  throw new Error('No PDF binary found for vision validation');\n}\n\nconst systemPrompt = \"You are an expert resume reviewer and recruiter. You are looking at a rendered PDF resume image.\\n\\nPerform a thorough visual audit across ALL four dimensions and return ONLY valid JSON (no markdown):\\n{\\n  \\\"layout\\\": {\\n    \\\"score\\\": 0-100,\\n    \\\"issues\\\": [],\\n    \\\"verdict\\\": \\\"PASS|FAIL\\\"\\n  },\\n  \\\"content_quality\\\": {\\n    \\\"score\\\": 0-100,\\n    \\\"weak_bullets\\\": [],\\n    \\\"improvements\\\": [],\\n    \\\"verdict\\\": \\\"PASS|FAIL\\\"\\n  },\\n  \\\"ats_keywords\\\": {\\n    \\\"score\\\": 0-100,\\n    \\\"visible_keywords\\\": [],\\n    \\\"missing_from_view\\\": [],\\n    \\\"verdict\\\": \\\"PASS|FAIL\\\"\\n  },\\n  \\\"cover_letter\\\": {\\n    \\\"score\\\": 0-100,\\n    \\\"tone_issues\\\": [],\\n    \\\"flow_issues\\\": [],\\n    \\\"verdict\\\": \\\"PASS|FAIL|NOT_PRESENT\\\"\\n  },\\n  \\\"overall_score\\\": 0-100,\\n  \\\"overall_verdict\\\": \\\"PASS|FAIL|NEEDS_REWRITE\\\",\\n  \\\"critical_issues\\\": [],\\n  \\\"recommendations\\\": []\\n}\\n\\nLAYOUT CHECK: Look for text overflow, truncated content, uneven spacing, margins cut off, overlapping elements, text too small to read.\\nCONTENT QUALITY: Weak verbs (worked on, helped with), vague bullets without impact/metrics, missing quantification where possible.\\nATS KEYWORDS: Confirm job-relevant keywords from the JD appear visibly in the document.\\nCOVER LETTER: If present \\u2014 check for robotic/AI tone, em-dashes, filler phrases (excited to, passionate about, leverage).\\n\\nBe strict. A score below 75 on any dimension = FAIL for that dimension.\";\n\nconst body = {\n  model: \"qwen2.5vl:7b-q4_K_M\",\n  stream: false,\n  messages: [\n    {\n      role: \"system\",\n      content: systemPrompt\n    },\n    {\n      role: \"user\",\n      content: [\n        {\n          type: \"image_url\",\n          image_url: { url: `data:application/pdf;base64,${pdfBase64}` }\n        },\n        {\n          type: \"text\",\n          text: `Job Title: ${data.jobTitle}\\nCompany: ${data.company}\\nKey JD keywords to verify: ${(data.jd || '').substring(0, 500)}\\n\\nAudit this resume PDF against all four dimensions.`\n        }\n      ]\n    }\n  ]\n};\nreturn [{ json: { ...data, _visionBody: JSON.stringify(body) }, binary: binaryData }];"
+      }
+    },
+    {
+      "id": "cf554370-04f7-4865-a7c9-adaee94ae8cf",
+      "name": "Vision Validate: Resume",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        820,
+        1136
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer ollama"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._visionBody }}",
+        "options": {
+          "timeout": 180000
+        }
+      }
+    },
+    {
+      "id": "e7517c48-3f0a-4610-bdcc-8dd5a3d9f0fa",
+      "name": "Vision Parse: Resume",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        1136
+      ],
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst data = $('Vision Validate: Resume [Builder]').first().json;\nconst binaryData = $('Parse PDF Output').first().binary || {};\n\nlet audit = {};\ntry {\n  let raw = resp.choices?.[0]?.message?.content || '{}';\n  raw = raw.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  audit = JSON.parse(raw);\n} catch(e) {\n  audit = { overall_score: 50, overall_verdict: 'FAIL', critical_issues: ['Vision parsing failed: ' + e.message], recommendations: [], layout: {score:50,verdict:'PASS'}, content_quality: {score:50,verdict:'PASS'}, ats_keywords: {score:50,verdict:'PASS'}, cover_letter: {score:50,verdict:'NOT_PRESENT'} };\n}\n\nconst needsVisualRepair = audit.overall_verdict === 'NEEDS_REWRITE' || audit.overall_score < 65;\nconst visionIssuesHtml = `\n<div style=\"background:#f8f9fa;border:1px solid #dee2e6;padding:12px;border-radius:6px;margin:8px 0;font-family:sans-serif\">\n  <strong>\ud83d\udccb Vision Audit \u2014 Resume</strong><br/>\n  <span style=\"font-size:13px\">Overall: <strong>${audit.overall_score}/100</strong> [${audit.overall_verdict}]</span><br/>\n  <ul style=\"font-size:12px;margin:4px 0\">\n    <li>Layout: ${audit.layout?.score}/100 ${audit.layout?.verdict}</li>\n    <li>Content: ${audit.content_quality?.score}/100 ${audit.content_quality?.verdict}</li>\n    <li>ATS Keywords: ${audit.ats_keywords?.score}/100 ${audit.ats_keywords?.verdict}</li>\n    <li>Cover Letter: ${audit.cover_letter?.score}/100 ${audit.cover_letter?.verdict}</li>\n  </ul>\n  ${(audit.critical_issues||[]).length > 0 ? '<strong>Critical:</strong><ul>' + audit.critical_issues.map(i=>'<li>'+i+'</li>').join('') + '</ul>' : ''}\n</div>`;\n\nreturn [{\n  json: { ...data, visionAudit: audit, visionIssuesHtml, needsVisualRepair },\n  binary: binaryData\n}];"
+      }
+    },
+    {
+      "id": "4c34ce0c-706f-4988-93b5-facfb2ebce35",
+      "name": "Vision Validate: Optimized [Builder]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2520,
+        912
+      ],
+      "parameters": {
+        "jsCode": "const binaryData = $input.first().binary || {};\nconst data = $input.first().json;\n\nconst pdfKey = Object.keys(binaryData).find(k => k.toLowerCase().includes('pdf')) || Object.keys(binaryData)[0];\nconst pdfBase64 = binaryData[pdfKey]?.data || '';\n\nconst systemPrompt = \"You are an expert resume reviewer and recruiter. You are looking at a rendered PDF resume image.\\n\\nPerform a thorough visual audit across ALL four dimensions and return ONLY valid JSON (no markdown):\\n{\\n  \\\"layout\\\": {\\n    \\\"score\\\": 0-100,\\n    \\\"issues\\\": [],\\n    \\\"verdict\\\": \\\"PASS|FAIL\\\"\\n  },\\n  \\\"content_quality\\\": {\\n    \\\"score\\\": 0-100,\\n    \\\"weak_bullets\\\": [],\\n    \\\"improvements\\\": [],\\n    \\\"verdict\\\": \\\"PASS|FAIL\\\"\\n  },\\n  \\\"ats_keywords\\\": {\\n    \\\"score\\\": 0-100,\\n    \\\"visible_keywords\\\": [],\\n    \\\"missing_from_view\\\": [],\\n    \\\"verdict\\\": \\\"PASS|FAIL\\\"\\n  },\\n  \\\"cover_letter\\\": {\\n    \\\"score\\\": 0-100,\\n    \\\"tone_issues\\\": [],\\n    \\\"flow_issues\\\": [],\\n    \\\"verdict\\\": \\\"PASS|FAIL|NOT_PRESENT\\\"\\n  },\\n  \\\"overall_score\\\": 0-100,\\n  \\\"overall_verdict\\\": \\\"PASS|FAIL|NEEDS_REWRITE\\\",\\n  \\\"critical_issues\\\": [],\\n  \\\"recommendations\\\": []\\n}\\n\\nLAYOUT CHECK: Look for text overflow, truncated content, uneven spacing, margins cut off, overlapping elements, text too small to read.\\nCONTENT QUALITY: Weak verbs (worked on, helped with), vague bullets without impact/metrics, missing quantification where possible.\\nATS KEYWORDS: Confirm job-relevant keywords from the JD appear visibly in the document.\\nCOVER LETTER: If present \\u2014 check for robotic/AI tone, em-dashes, filler phrases (excited to, passionate about, leverage).\\n\\nBe strict. A score below 75 on any dimension = FAIL for that dimension.\";\n\nconst body = {\n  model: \"qwen2.5vl:7b-q4_K_M\",\n  stream: false,\n  messages: [\n    {\n      role: \"system\",\n      content: systemPrompt\n    },\n    {\n      role: \"user\",\n      content: [\n        {\n          type: \"image_url\",\n          image_url: { url: `data:application/pdf;base64,${pdfBase64}` }\n        },\n        {\n          type: \"text\",\n          text: `Job Title: ${data.jobTitle}\\nCompany: ${data.company}\\nThis is the ATS-OPTIMIZED v2 resume. Verify all ATS fixes were applied and the document looks professional.\\nKey JD keywords: ${(data.jd || '').substring(0, 500)}`\n        }\n      ]\n    }\n  ]\n};\nreturn [{ json: { ...data, _visionBody: JSON.stringify(body) }, binary: binaryData }];"
+      }
+    },
+    {
+      "id": "d2871432-62a0-465c-8d33-b201cb0be3c4",
+      "name": "Vision Validate: Optimized",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2740,
+        912
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer ollama"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json._visionBody }}",
+        "options": {
+          "timeout": 180000
+        }
+      }
+    },
+    {
+      "id": "f28e6f44-7c03-4e42-872a-6eeaee6f6a87",
+      "name": "Vision Parse: Optimized",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2960,
+        912
+      ],
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst data = $('Vision Validate: Optimized [Builder]').first().json;\nconst binaryData = $('Parse Optimized PDF Output').first().binary || {};\n\nlet audit = {};\ntry {\n  let raw = resp.choices?.[0]?.message?.content || '{}';\n  raw = raw.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  audit = JSON.parse(raw);\n} catch(e) {\n  audit = { overall_score: 50, overall_verdict: 'FAIL', critical_issues: ['Vision parsing failed: ' + e.message], recommendations: [] };\n}\n\nconst visionOptHtml = `\n<div style=\"background:#e8f5e9;border:1px solid #4caf50;padding:12px;border-radius:6px;margin:8px 0;font-family:sans-serif\">\n  <strong>\u2705 Vision Audit \u2014 ATS Optimized v2</strong><br/>\n  <span style=\"font-size:13px\">Overall: <strong>${audit.overall_score}/100</strong> [${audit.overall_verdict}]</span><br/>\n  <ul style=\"font-size:12px;margin:4px 0\">\n    <li>Layout: ${audit.layout?.score}/100 ${audit.layout?.verdict || ''}</li>\n    <li>Content: ${audit.content_quality?.score}/100 ${audit.content_quality?.verdict || ''}</li>\n    <li>ATS Keywords: ${audit.ats_keywords?.score}/100 ${audit.ats_keywords?.verdict || ''}</li>\n    <li>Cover Letter: ${audit.cover_letter?.score}/100 ${audit.cover_letter?.verdict || ''}</li>\n  </ul>\n  ${(audit.recommendations||[]).length > 0 ? '<em>' + audit.recommendations.join('; ') + '</em>' : ''}\n</div>`;\n\nreturn [{\n  json: { ...data, visionAuditOpt: audit, visionOptHtml },\n  binary: binaryData\n}];"
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Step 1: Upload Resume & Job Details": {
+      "main": [
+        [
+          {
+            "node": "Initialise + Store File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialise + Store File": {
+      "main": [
+        [
+          {
+            "node": "Prepare File for Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare File for Extraction": {
+      "main": [
+        [
+          {
+            "node": "Extract Resume Data [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Extracted Data": {
+      "main": [
+        [
+          {
+            "node": "Merge All Confirmed Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All Confirmed Data": {
+      "main": [
+        [
+          {
+            "node": "Summary: llama-70b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Summary: gemma2-9b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Summary: mixtral-8x7b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Summary: gemini-2.0-flash [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Experience: llama-70b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Experience: gemma2-9b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Experience: mixtral-8x7b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Experience: gemini-2.0-flash [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Skills: llama-70b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Skills: gemma2-9b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Skills: mixtral-8x7b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Skills: gemini-2.0-flash [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Projects: llama-70b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Projects: gemma2-9b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Projects: mixtral-8x7b [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Projects: gemini-2.0-flash [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary: llama-70b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary: gemma2-9b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary: mixtral-8x7b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary: gemini-2.0-flash": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Experience: llama-70b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Experience: gemma2-9b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Experience: mixtral-8x7b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Experience: gemini-2.0-flash": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skills: llama-70b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skills: gemma2-9b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skills: mixtral-8x7b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skills: gemini-2.0-flash": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Projects: llama-70b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Projects: gemma2-9b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Projects: mixtral-8x7b": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cover Letter: gemini (humanized)": {
+      "main": [
+        [
+          {
+            "node": "Collect All Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect All Candidates": {
+      "main": [
+        [
+          {
+            "node": "Judge: Synthesise Best Sections [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Judge: Synthesise Best Sections": {
+      "main": [
+        [
+          {
+            "node": "Parse Judge Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Judge Output": {
+      "main": [
+        [
+          {
+            "node": "Gemini: Ground Truth Verification [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Ground Truth Corrections": {
+      "main": [
+        [
+          {
+            "node": "Validate All Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate All Sections": {
+      "main": [
+        [
+          {
+            "node": "All Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Valid?": {
+      "main": [
+        [
+          {
+            "node": "Assemble Document",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Repair Failed Sections [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Repair Failed Sections": {
+      "main": [
+        [
+          {
+            "node": "Merge Repairs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Repairs": {
+      "main": [
+        [
+          {
+            "node": "Assemble Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Document": {
+      "main": [
+        [
+          {
+            "node": "Score vs JD [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gemini: ATS Analysis [Builder]",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Render PDF: Prepare Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score vs JD": {
+      "main": [
+        [
+          {
+            "node": "Wait For All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render PDF (primary)": {
+      "main": [
+        [
+          {
+            "node": "Parse PDF Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Primary PDF OK?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Render PDF Fallback: Prepare Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render PDF (fallback)": {
+      "main": [
+        [
+          {
+            "node": "Fallback PDF OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback PDF OK?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Email: LaTeX Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Final Output": {
+      "main": [
+        [
+          {
+            "node": "Prepare Both Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Both Attachments": {
+      "main": [
+        [
+          {
+            "node": "Email: PDF + TEX + Score + ATS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "ATS Below Threshold?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ATS Below Threshold?": {
+      "main": [
+        [
+          {
+            "node": "Gemini: ATS Fix Plan [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: ATS Fix Plan": {
+      "main": [
+        [
+          {
+            "node": "Parse ATS Fix Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse ATS Fix Plan": {
+      "main": [
+        [
+          {
+            "node": "Re-Optimize Weak Sections [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-Optimize Weak Sections": {
+      "main": [
+        [
+          {
+            "node": "Merge Re-Optimized Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Re-Optimized Sections": {
+      "main": [
+        [
+          {
+            "node": "Assemble Optimized Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Optimized Document": {
+      "main": [
+        [
+          {
+            "node": "Render Opt PDF: Prepare Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Optimized PDF": {
+      "main": [
+        [
+          {
+            "node": "Parse Optimized PDF Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Optimized Attachments": {
+      "main": [
+        [
+          {
+            "node": "Email: Optimized PDF v2 + TEX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama: Extract Resume Data": {
+      "main": [
+        [
+          {
+            "node": "Parse Extracted Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary: llama-70b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Summary: llama-70b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary: gemma2-9b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Summary: gemma2-9b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary: mixtral-8x7b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Summary: mixtral-8x7b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Experience: llama-70b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Experience: llama-70b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Experience: gemma2-9b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Experience: gemma2-9b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Experience: mixtral-8x7b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Experience: mixtral-8x7b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skills: llama-70b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Skills: llama-70b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skills: gemma2-9b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Skills: gemma2-9b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skills: mixtral-8x7b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Skills: mixtral-8x7b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Projects: llama-70b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Projects: llama-70b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Projects: gemma2-9b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Projects: gemma2-9b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Projects: mixtral-8x7b [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Projects: mixtral-8x7b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cover Letter: gemini (humanized) [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Judge: Synthesise Best Sections [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Judge: Synthesise Best Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Repair Failed Sections [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Repair Failed Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score vs JD [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Score vs JD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-Optimize Weak Sections [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Re-Optimize Weak Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: Ground Truth Verification [Builder]": {
+      "main": [
+        [
+          {
+            "node": "groq: Ground Truth Verification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: ATS Analysis [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Gemini: ATS Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary: gemini-2.0-flash [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Summary: gemini-2.0-flash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Experience: gemini-2.0-flash [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Experience: gemini-2.0-flash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skills: gemini-2.0-flash [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Skills: gemini-2.0-flash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Projects: gemini-2.0-flash [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Projects: gemini-2.0-flash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Projects: gemini-2.0-flash": {
+      "main": [
+        [
+          {
+            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: ATS Fix Plan [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Gemini: ATS Fix Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini: ATS Analysis": {
+      "main": [
+        [
+          {
+            "node": "Wait For All Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Render PDF: Prepare Command": {
+      "main": [
+        [
+          {
+            "node": "Render PDF (primary)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render PDF Fallback: Prepare Command": {
+      "main": [
+        [
+          {
+            "node": "Render PDF (fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For All Results": {
+      "main": [
+        [
+          {
+            "node": "Merge Final Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "groq: Ground Truth Verification": {
+      "main": [
+        [
+          {
+            "node": "Apply Ground Truth Corrections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Opt PDF: Prepare Command": {
+      "main": [
+        [
+          {
+            "node": "Render Optimized PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Resume Data [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Ollama: Extract Resume Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse PDF Output": {
+      "main": [
+        [
+          {
+            "node": "Vision Validate: Resume [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Validate: Resume [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Vision Validate: Resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Validate: Resume": {
+      "main": [
+        [
+          {
+            "node": "Vision Parse: Resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Parse: Resume": {
+      "main": [
+        [
+          {
+            "node": "Merge Final Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Optimized PDF Output": {
+      "main": [
+        [
+          {
+            "node": "Vision Validate: Optimized [Builder]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Validate: Optimized [Builder]": {
+      "main": [
+        [
+          {
+            "node": "Vision Validate: Optimized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Validate: Optimized": {
+      "main": [
+        [
+          {
+            "node": "Vision Parse: Optimized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Parse: Optimized": {
+      "main": [
+        [
+          {
+            "node": "Prepare Optimized Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "2db0636c-84e1-4d3b-9237-9029611e5dac",
+  "meta": {
+    "instanceId": "467bee907b056699c77641a8582d2695eb22f903f00daec7e4c2b5e008c0ac5e"
+  },
+  "id": "zNL57MIOvwkNIhqz",
+  "tags": []
+}

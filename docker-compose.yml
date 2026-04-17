@@ -1,0 +1,43 @@
+services:
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    volumes:
+      - sananakther_n8n_data:/home/node/.n8n
+    environment:
+      - N8N_DEFAULT_BINARY_DATA_MODE=default
+      - GENERIC_TIMEZONE=UTC
+    networks:
+      - resume_net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets n8n reach Ollama on your Mac
+    depends_on:
+      latex-service:
+        condition: service_healthy
+
+  latex-service:
+    build:
+      context: ./latex-service
+      dockerfile: Dockerfile
+    container_name: latex-service
+    restart: unless-stopped
+    expose:
+      - "3000"
+    networks:
+      - resume_net
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 512M
+
+networks:
+  resume_net:
+    driver: bridge
+
+volumes:
+  sananakther_n8n_data:
+    external: true
