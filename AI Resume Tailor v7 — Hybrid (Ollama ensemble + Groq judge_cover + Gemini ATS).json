@@ -1022,253 +1022,6 @@
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 1
-          },
-          "conditions": [
-            {
-              "leftValue": "={{ $json.needsReopt }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "true"
-              },
-              "id": "d91875e3-30e8-4643-b1f0-826fa8e1dcca"
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "3be89ce3-8563-4e09-a407-8ebed9168d96",
-      "name": "ATS Below Threshold?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        -528,
-        -192
-      ],
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:11434/v1/chat/completions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "name": "Authorization",
-              "value": "Bearer ollama"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "raw",
-        "body": "={{ $json._ollamaBody }}",
-        "options": {
-          "timeout": 300000
-        }
-      },
-      "id": "914e4082-7961-443d-ae9a-2fd6444d8f20",
-      "name": "Gemini: ATS Fix Plan",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        144,
-        -192
-      ],
-      "retryOnFail": true,
-      "waitBetweenTries": 5000,
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "9gVshl2yeUAmiKxE",
-          "name": "Header Auth account 2"
-        }
-      },
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "jsCode": "const planResp = $input.first().json;\nconst data = $('Merge Final Output').first().json;\nlet plan = {};\ntry {\n  let r = planResp.choices?.[0]?.message?.content || planResp.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  r = r.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  plan = JSON.parse(r);\n} catch(e) { plan = { priority_sections:['summary','experience'], section_fixes:{}, estimated_score_after_fixes:80 }; }\nconst rows = Object.entries(plan.section_fixes||{}).map(([s,f]) => {\n  if (!f.needs_rewrite) return '<li><strong>'+s+'</strong>: no rewrite needed</li>';\n  return '<li><strong>'+s+'</strong>:<ul>'+(f.specific_changes||[]).map(c=>'<li>'+c+'</li>').join('')+'</ul>'+((f.keywords_to_add||[]).length?'<em>Add: '+f.keywords_to_add.join(', ')+'</em>':'')+'</li>';\n}).join('');\nconst planHTML = '<h2>ATS Re-Optimization Plan</h2><p>Current: <strong>'+data.atsScore+'/100</strong> | Estimated: <strong>'+plan.estimated_score_after_fixes+'/100</strong></p><ul>'+rows+'</ul>';\nreturn [{ json: { ...data, atsPlan:plan, planHTML } }];"
-      },
-      "id": "45eaa6c1-238a-4089-966a-3e0abcec0bcb",
-      "name": "Parse ATS Fix Plan",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        368,
-        -192
-      ],
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 5000,\n  temperature: 0.2,\n  messages: [\n    { role: \"system\", content: `Re-synthesise only failed ATS sections using fix plan. Never change employer names, titles, dates. Output only tags for needs_rewrite=true:\n<SUMMARY>...</SUMMARY>\n<EXPERIENCE>...</EXPERIENCE>\n<SKILLS>...</SKILLS>\n<PROJECTS>...</PROJECTS>` },\n    { role: \"user\",   content: `FIX PLAN: ${JSON.stringify(data.atsPlan.section_fixes)}\nJD: ${data.jd}\n[summary] ${data.sections.summary}\n[experience] ${data.sections.experience}\n[skills] ${data.sections.skills}\n[projects] ${data.sections.projects}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
-      },
-      "id": "6da61068-0244-4d22-bfd8-faa77d756f97",
-      "name": "Re-Optimize Weak Sections [Builder]",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        592,
-        -192
-      ],
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:11434/v1/chat/completions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "name": "Authorization",
-              "value": "Bearer ollama"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "raw",
-        "body": "={{ $json._groqBody }}",
-        "options": {
-          "timeout": 300000
-        }
-      },
-      "id": "f8a1fea3-e68b-4e95-ac97-8ab403dcebde",
-      "name": "Re-Optimize Weak Sections",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1040,
-        -192
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "KiaQQV4PKVBqLXZK",
-          "name": "Header Auth account"
-        }
-      },
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "jsCode": "function fix(t){if(!t)return t;return t.replace(/(?<!\\\\)&(?![a-zA-Z])/g,'\\\\&').replace(/([^\\\\])%(?![\\s]*$)/gm,'$1\\\\%').replace(/[\\u2018\\u2019]/g,\"'\").replace(/[\\u201C\\u201D]/g,'\"').replace(/\\u2014/g,'---').replace(/\\u2013/g,'--').replace(/[\\u200B-\\u200D\\uFEFF]/g,'');}\nfunction ext(tag,text){const m=text.match(new RegExp('<'+tag+'>[\\\\s\\\\S]*?</'+tag+'>'));return m?m[0].replace(new RegExp('<'+tag+'>'),'').replace(new RegExp('</'+tag+'>'),'').replace(/^```latex\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim():null;}\nconst raw=($input.first().json?.choices?.[0]?.message?.content)||'';\nconst data=$('Parse ATS Fix Plan').first().json;\nconst sections={...data.sections};\nconst fixes=data.atsPlan?.section_fixes||{};\nconst improved=[];\nfor(const[name,f]of Object.entries(fixes)){\n  if(f.needs_rewrite){\n    const tags={summary:'SUMMARY',experience:'EXPERIENCE',skills:'SKILLS',projects:'PROJECTS'};\n    const r=ext(tags[name],raw);\n    if(r&&r.length>20){sections[name]=['experience','skills','projects'].includes(name)?fix(r):r;improved.push(name);}\n  }\n}\nreturn [{json:{...data,sections,improvedSections:improved}}];"
-      },
-      "id": "5b88c216-54b0-4fb0-a10b-6632ed5cc4dd",
-      "name": "Merge Re-Optimized Sections",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1264,
-        -192
-      ],
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst base = $('Merge All Confirmed Data').first().json;\nconst s = data.sections;\n\nfunction sanitise(text) {\n  if (!text) return '';\n  text = text.replace(/\\\\documentclass[^\\n]*/g, '');\n  text = text.replace(/\\\\usepackage[^\\n]*/g, '');\n  text = text.replace(/\\\\begin\\{document\\}/g, '');\n  text = text.replace(/\\\\end\\{document\\}/g, '');\n  text = text.replace(/\\\\pagestyle[^\\n]*/g, '');\n  text = text.replace(/\\\\thispagestyle[^\\n]*/g, '');\n  text = text.replace(/\\\\maketitle/g, '');\n  text = text.replace(/\\\\(?:sub)*section\\*?\\{[^}]*\\}/g, '');\n  text = text.replace(/<[^>]{1,80}>/g, '');\n  text = text.replace(/^\\\\\\\\\\s*/gm, '');\n  text = text.replace(/^\\s*\\\\\\\\\\s*$/gm, '');\n  text = text.replace(/\\\\\\\\\\s*(\\\\end\\{)/g, '\\n$1');\n  // Remove \\\\ immediately before \\begin{...}\n  text = text.replace(/\\\\\\\\\\s*\\n(\\s*\\\\begin\\{)/g, '\\n$1');\n  // Remove \\\\ at end of line when it would cause \"no line here\" in itemize context\n  text = text.replace(/\\\\\\\\\\s*\\n(\\s*\\\\item)/g, '\\n$1');\n  // Remove trailing \\\\ before end of itemize\n  text = text.replace(/\\\\\\\\(\\s*\\n\\s*\\\\end\\{itemize\\})/g, '$1');\n  var opens = (text.match(/\\\\begin\\{itemize\\}/g) || []).length;\n  var closes = (text.match(/\\\\end\\{itemize\\}/g) || []).length;\n  if (opens > closes) { text += '\\n' + '\\\\end{itemize}'.repeat(opens - closes); }\n  if (closes > opens) { var ex1 = closes - opens; text = text.replace(/\\\\end\\{itemize\\}/g, function(m) { return ex1-- > 0 ? '' : m; }); }\n  var mopens = (text.match(/\\\\begin\\{multicols\\}/g) || []).length;\n  var mcloses = (text.match(/\\\\end\\{multicols\\}/g) || []).length;\n  if (mopens > mcloses) { text += '\\n' + '\\\\end{multicols}'.repeat(mopens - mcloses); }\n  if (mcloses > mopens) { var ex2 = mcloses - mopens; text = text.replace(/\\\\end\\{multicols\\}/g, function(m) { return ex2-- > 0 ? '' : m; }); }\n  text = text.replace(/^#{1,6}\\s+/gm, '');\n  text = text.replace(/\\*\\*([^*\\n]+)\\*\\*/g, '\\\\textbf{$1}');\n  text = text.replace(/\\*([^*\\n]+)\\*/g, '\\\\textit{$1}');\n  text = text.replace(/\\n{3,}/g, '\\n\\n');\n  return text.trim();\n}\n\nfunction ensureLatex(text, section) {\n  if (!text || text.trim().length < 5) return '% ' + section + ' section empty';\n  // If text has no LaTeX commands at all, it's plain prose — wrap it safely\n  if (!text.includes('\\\\') && !text.includes('\\\\begin') && !text.includes('\\\\item')) {\n    if (section === 'summary') return text; // summary is plain text, that's fine\n    // For other sections, wrap in itemize\n    const lines = text.split('\\n').filter(l => l.trim().length > 5);\n    if (lines.length === 0) return '% ' + section + ' section empty';\n    return '\\\\begin{itemize}\\n' + lines.map(l => '\\\\item ' + l.trim()).join('\\n') + '\\n\\\\end{itemize}';\n  }\n  return text;\n}\n\nconst latexOptimized = `\\\\documentclass[10pt, a4paper]{article}\n\\\\usepackage[T1]{fontenc}\n\\\\usepackage[utf8]{inputenc}\n\\\\usepackage{lmodern}\n\\\\usepackage[margin=1.8cm, top=1.5cm, bottom=1.5cm]{geometry}\n\\\\usepackage{hyperref}\n\\\\usepackage{xcolor}\n\\\\usepackage{enumitem}\n\\\\usepackage{multicol}\n\\\\usepackage{parskip}\n\\\\usepackage{titlesec}\n\\\\definecolor{accentblue}{HTML}{2B5EAB}\n\\\\hypersetup{colorlinks=true,urlcolor=accentblue,linkcolor=accentblue}\n\\\\titleformat{\\\\section}{\\\\large\\\\bfseries\\\\color{accentblue}}{}{0em}{}[\\\\color{accentblue}\\\\titlerule]\n\\\\titlespacing{\\\\section}{0pt}{8pt}{4pt}\n\\\\setlength{\\\\parindent}{0pt}\n\\\\setlength{\\\\parskip}{2pt}\n\\\\setlist[itemize]{leftmargin=1.2em,itemsep=1pt,parsep=0pt,topsep=2pt,label=\\\\textbullet}\n\\\\begin{document}\n\\\\pagestyle{empty}\n\\\\begin{center}\n{\\\\LARGE\\\\bfseries ${base.safeName}}\\\\\\\\[4pt]\n{\\\\small ${base.headerContact}}\n\\\\end{center}\n\\\\section{Summary}\n${sanitise(s.summary)}\n\\\\section{Professional Experience}\n${ensureLatex(sanitise(s.experience), \"experience\")}\n\\\\section{Education}\n${sanitise(s.education) || '% Education: add manually if not extracted'}\n\\\\section{Skills}\n${ensureLatex(sanitise(s.skills), \"skills\")}\n\\\\section{Projects}\n${ensureLatex(sanitise(s.projects), \"projects\")}\n\\\\end{document}\\`;\n\nreturn [{ json: { ...data, latexOptimized } }];"
-      },
-      "id": "7a1441bc-97a4-41ea-af52-0639defa837d",
-      "name": "Assemble Optimized Document",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1488,
-        -192
-      ],
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://latex-service:3000/compile",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "raw",
-        "body": "={{ $json._latexBody }}",
-        "options": {
-          "timeout": 120000
-        }
-      },
-      "id": "487d10e3-1c6d-421b-91d1-67bcd0de05ed",
-      "name": "Render Optimized PDF",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        1936,
-        -192
-      ],
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "jsCode": "function toBase64(str) {\n  const t = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';\n  const bytes = [];\n  for (let i = 0; i < str.length; i++) {\n    const c = str.charCodeAt(i);\n    if (c < 0x80) { bytes.push(c); }\n    else if (c < 0x800) { bytes.push(0xC0|(c>>6), 0x80|(c&63)); }\n    else { bytes.push(0xE0|(c>>12), 0x80|((c>>6)&63), 0x80|(c&63)); }\n  }\n  let r = '';\n  for (let i = 0; i < bytes.length; i += 3) {\n    const b0=bytes[i], b1=bytes[i+1]||0, b2=bytes[i+2]||0;\n    r += t[b0>>2] + t[((b0&3)<<4)|(b1>>4)];\n    r += i+1<bytes.length ? t[((b1&15)<<2)|(b2>>6)] : '=';\n    r += i+2<bytes.length ? t[b2&63] : '=';\n  }\n  return r;\n}\nconst data = $('Assemble Optimized Document').first().json;\nconst base = $('Merge All Confirmed Data').first().json;\nconst fileName = (base.company||'Resume').replace(/\\s+/g,'_') + '_' + data.runId + '_ATS_v2';\n\nconst pdfBinary = $('Parse Optimized PDF Output').first().binary?.resumePdfOpt || null;\n\nconst binaryOut = {\n  resumeTexOpt: { data: toBase64(data.latexOptimized || ''), mimeType: 'application/x-tex', fileName: fileName + '.tex' }\n};\nif (pdfBinary) binaryOut.resumePdfOpt = { ...pdfBinary, fileName: fileName + '.pdf' };\n\nreturn [{\n  json: { ...data, fileNameOpt: fileName },\n  binary: binaryOut\n}];"
-      },
-      "id": "c161b7ca-1f87-4618-a105-aa3b240f0300",
-      "name": "Prepare Optimized Attachments",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2384,
-        -192
-      ],
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "fromEmail": "={{ $('Merge All Confirmed Data').first().json.email || $('Initialise + Store File').first().json.formEmail }}",
-        "toEmail": "={{ $('Merge All Confirmed Data').first().json.email || $('Initialise + Store File').first().json.formEmail }}",
-        "subject": "=ATS-Optimized Resume v2: {{ $('Merge All Confirmed Data').first().json.jobTitle }} @ {{ $('Merge All Confirmed Data').first().json.company }}",
-        "html": "=<h2>ATS-Optimized Resume v2</h2><p>Your ATS-optimized resume is attached. This version scored above the {{ $('Merge All Confirmed Data').first().json.atsThreshold }}/100 threshold.</p>{{ $json.visionOptHtml || '' }}",
-        "options": {
-          "attachments": "resumePdfOpt,resumeTexOpt"
-        }
-      },
-      "id": "946fc4be-4f48-4a0c-be93-bec0b9c5426f",
-      "name": "Email: Optimized PDF v2 + TEX",
-      "type": "n8n-nodes-base.emailSend",
-      "typeVersion": 2.1,
-      "position": [
-        2608,
-        -192
-      ],
-      "webhookId": "9704ff0d-de7a-4141-b10b-b4d83ccb65e3",
-      "credentials": {
-        "smtp": {
-          "id": "oxLyP4vqkNAJFmXe",
-          "name": "SMTP account"
-        }
-      },
-      "disabled": true
-    },
-    {
-      "parameters": {
         "fromEmail": "={{ $('Merge All Confirmed Data').first().json.email || $('Initialise + Store File').first().json.formEmail }}",
         "toEmail": "={{ $('Merge All Confirmed Data').first().json.email || $('Initialise + Store File').first().json.formEmail }}",
         "subject": "==PDF Render Failed — LaTeX Fallback [{{ $('Merge All Confirmed Data').first().json.jobTitle }}]",
@@ -1416,20 +1169,6 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $('Merge Final Output').first().json;\nconst prompt = `ATS fix plan. Return ONLY valid JSON (no markdown, no code fences):\n{\"priority_sections\":[],\"section_fixes\":{\"summary\":{\"needs_rewrite\":false,\"specific_changes\":[],\"keywords_to_add\":[]},\"experience\":{\"needs_rewrite\":false,\"specific_changes\":[],\"keywords_to_add\":[]},\"skills\":{\"needs_rewrite\":false,\"specific_changes\":[],\"keywords_to_add\":[]},\"projects\":{\"needs_rewrite\":false,\"specific_changes\":[],\"keywords_to_add\":[]}},\"estimated_score_after_fixes\":80}\n\nResume scored ${data.atsScore}/100. Target: ${data.base?.atsThreshold || 75}/100.\nJD: ${(data.jd||'').substring(0,500)}\nSUMMARY: ${(data.sections?.summary||'').substring(0,300)}\nEXPERIENCE: ${(data.sections?.experience||'').substring(0,500)}\nSKILLS: ${(data.sections?.skills||'').substring(0,300)}\nPROJECTS: ${(data.sections?.projects||'').substring(0,300)}`;\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 1000,\n  temperature: 0.1,\n  stream: false,\n  messages: [\n    { role: \"system\", content: \"You are an ATS expert. Return only valid JSON, no markdown, no explanation.\" },\n    { role: \"user\", content: prompt }\n  ]\n};\nreturn [{ json: { ...data, _ollamaBody: JSON.stringify(body) } }];"
-      },
-      "id": "2abf1b6d-cfa7-4640-87e4-6b8db23b8a42",
-      "name": "Gemini: ATS Fix Plan [Builder]",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        -304,
-        -192
-      ],
-      "disabled": true
-    },
-    {
-      "parameters": {
         "jsCode": "const data = $input.first().json;\nconst latex = data.latex || '';\nif (!latex || latex.trim().length < 20) throw new Error('latex field is empty.');\nconst body = { latex };\nreturn [{ json: { ...data, _latexBody: JSON.stringify(body) } }];"
       },
       "type": "n8n-nodes-base.code",
@@ -1529,20 +1268,6 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst latex = data.latexOptimized || '';\nif (!latex || latex.trim().length < 20) throw new Error('latexOptimized field is empty.');\nconst body = { latex };\nreturn [{ json: { ...data, _latexBody: JSON.stringify(body) } }];"
-      },
-      "id": "f7599dd7-6f4e-4850-9573-b25d3d9e6500",
-      "name": "Render Opt PDF: Prepare Command",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1712,
-        -192
-      ],
-      "disabled": true
-    },
-    {
-      "parameters": {
         "jsCode": "const resp = $input.first().json;\nconst data = $('Render PDF: Prepare Command').first().json;\n\nif (!resp.success) {\n  throw new Error('LaTeX compile failed: ' + (resp.error || 'unknown error'));\n}\n\nconst pdfBase64 = resp.pdfBase64 || '';\nif (!pdfBase64 || pdfBase64.length < 100) {\n  throw new Error('Sidecar returned empty PDF. Log: ' + (resp.log || '').substring(0, 500));\n}\n\nreturn [{\n  json: { ...data, mimeType: 'application/pdf', latexLog: resp.log || '', pageImages: resp.pageImages || [], pdfBase64 },\n  binary: {\n    resumePdf: {\n      data: pdfBase64,\n      mimeType: 'application/pdf',\n      fileName: (data.runId || 'resume') + '.pdf'\n    }\n  }\n}];"
       },
       "id": "dfa1c84c-5a2e-4aa1-87ee-6a9cda9bc2d0",
@@ -1553,20 +1278,6 @@
         -1200,
         -96
       ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const resp = $input.first().json;\nconst data = $('Render Opt PDF: Prepare Command').first().json;\n\nif (!resp.success) {\n  throw new Error('LaTeX compile failed (optimized): ' + (resp.error || 'unknown error'));\n}\n\nconst pdfBase64 = resp.pdfBase64 || '';\nif (!pdfBase64 || pdfBase64.length < 100) {\n  throw new Error('Sidecar returned empty PDF (optimized). Log: ' + (resp.log || '').substring(0, 500));\n}\n\nreturn [{\n  json: { ...data, mimeType: 'application/pdf', latexLogOpt: resp.log || '', pageImages: resp.pageImages || [] },\n  binary: {\n    resumePdfOpt: {\n      data: pdfBase64,\n      mimeType: 'application/pdf',\n      fileName: (data.runId || 'resume') + '_ATS_v2.pdf'\n    }\n  }\n}];"
-      },
-      "id": "049c8fb4-6a5f-4693-8de2-7fd773b3b22f",
-      "name": "Parse Optimized PDF Output",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2160,
-        -192
-      ],
-      "disabled": true
     },
     {
       "parameters": {
@@ -1633,22 +1344,6 @@
         "amount": 8,
         "unit": "seconds"
       },
-      "id": "b39c6e28-1ac6-4a33-a4b6-bab3d119b27f",
-      "name": "Wait before Re-Optimize",
-      "type": "n8n-nodes-base.wait",
-      "typeVersion": 1,
-      "position": [
-        816,
-        -192
-      ],
-      "webhookId": "fc1d49e2-738e-4349-b5f9-7d7a2c415332",
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "amount": 8,
-        "unit": "seconds"
-      },
       "id": "ab834fd3-58f7-49c7-800a-81f5edafcd0f",
       "name": "Wait before Repair",
       "type": "n8n-nodes-base.wait",
@@ -1673,22 +1368,6 @@
         224
       ],
       "webhookId": "0e6a3fe1-2998-41c6-8796-4523ddb32a53"
-    },
-    {
-      "parameters": {
-        "amount": 5,
-        "unit": "seconds"
-      },
-      "id": "f90f3ef4-7ca2-4d33-8a88-f6e6507df68f",
-      "name": "Wait before ATS Fix Plan",
-      "type": "n8n-nodes-base.wait",
-      "typeVersion": 1,
-      "position": [
-        -80,
-        -192
-      ],
-      "webhookId": "6f2b4a7b-0634-4752-9c1b-ffba56c1ddd0",
-      "disabled": true
     },
     {
       "parameters": {
@@ -2170,95 +1849,6 @@
         ]
       ]
     },
-    "ATS Below Threshold?": {
-      "main": [
-        [],
-        [
-          {
-            "node": "Gemini: ATS Fix Plan [Builder]",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Gemini: ATS Fix Plan": {
-      "main": [
-        [
-          {
-            "node": "Parse ATS Fix Plan",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parse ATS Fix Plan": {
-      "main": [
-        [
-          {
-            "node": "Re-Optimize Weak Sections [Builder]",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Re-Optimize Weak Sections": {
-      "main": [
-        [
-          {
-            "node": "Merge Re-Optimized Sections",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Merge Re-Optimized Sections": {
-      "main": [
-        [
-          {
-            "node": "Assemble Optimized Document",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Assemble Optimized Document": {
-      "main": [
-        [
-          {
-            "node": "Render Opt PDF: Prepare Command",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Render Optimized PDF": {
-      "main": [
-        [
-          {
-            "node": "Parse Optimized PDF Output",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Prepare Optimized Attachments": {
-      "main": [
-        [
-          {
-            "node": "Email: Optimized PDF v2 + TEX",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Ollama: Extract Resume Data": {
       "main": [
         [
@@ -2358,17 +1948,6 @@
         ]
       ]
     },
-    "Re-Optimize Weak Sections [Builder]": {
-      "main": [
-        [
-          {
-            "node": "Wait before Re-Optimize",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Gemini: Ground Truth Verification [Builder]": {
       "main": [
         [
@@ -2446,17 +2025,6 @@
         ]
       ]
     },
-    "Gemini: ATS Fix Plan [Builder]": {
-      "main": [
-        [
-          {
-            "node": "Wait before ATS Fix Plan",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Gemini: ATS Analysis": {
       "main": [
         [
@@ -2512,17 +2080,6 @@
         ]
       ]
     },
-    "Render Opt PDF: Prepare Command": {
-      "main": [
-        [
-          {
-            "node": "Render Optimized PDF",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Extract Resume Data [Builder]": {
       "main": [
         [
@@ -2539,17 +2096,6 @@
         [
           {
             "node": "Vision Parse: Resume",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parse Optimized PDF Output": {
-      "main": [
-        [
-          {
-            "node": "Prepare Optimized Attachments",
             "type": "main",
             "index": 0
           }
@@ -2600,17 +2146,6 @@
         ]
       ]
     },
-    "Wait before Re-Optimize": {
-      "main": [
-        [
-          {
-            "node": "Re-Optimize Weak Sections",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Wait before Repair": {
       "main": [
         [
@@ -2627,17 +2162,6 @@
         [
           {
             "node": "Gemini: ATS Analysis",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Wait before ATS Fix Plan": {
-      "main": [
-        [
-          {
-            "node": "Gemini: ATS Fix Plan",
             "type": "main",
             "index": 0
           }
