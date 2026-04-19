@@ -34,7 +34,28 @@ function compileLaTeX(latexSource) {
     }
 
     const pdfBuffer = fs.readFileSync(pdfFile);
-    return { success: true, pdfBase64: pdfBuffer.toString('base64'), log };
+    const pdfBase64 = pdfBuffer.toString('base64');
+
+    // Convert each PDF page to PNG using ghostscript for vision validation
+    // -r150 = 150 DPI — good quality/size balance for vision models
+    const pngPattern = path.join(tmpDir, 'page-%02d.png');
+    let pageImages = [];
+    try {
+      execSync(
+        `gs -dNOPAUSE -dBATCH -sDEVICE=png16m -r150 -dUseCropBox -sOutputFile=${pngPattern} ${pdfFile}`,
+        { timeout: 30000 }
+      );
+      const pngFiles = fs.readdirSync(tmpDir)
+        .filter(f => f.startsWith('page-') && f.endsWith('.png'))
+        .sort();
+      pageImages = pngFiles.map(f =>
+        fs.readFileSync(path.join(tmpDir, f)).toString('base64')
+      );
+    } catch (e) {
+      console.warn('PNG conversion skipped (gs not available):', e.message);
+    }
+
+    return { success: true, pdfBase64, pageImages, log };
   } finally {
     // Clean up temp files
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(_) {}

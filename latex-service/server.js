@@ -13,6 +13,7 @@ function compileLaTeX(latexSource) {
 
   try {
     fs.writeFileSync(texFile, latexSource, 'utf8');
+
     const cmd = `pdflatex -interaction=nonstopmode -halt-on-error -output-directory ${tmpDir} ${texFile}`;
     let log = '';
     try {
@@ -27,8 +28,29 @@ function compileLaTeX(latexSource) {
         throw new Error('pdflatex failed:\n' + errLines);
       }
     }
+
     const pdfBuffer = fs.readFileSync(pdfFile);
-    return { success: true, pdfBase64: pdfBuffer.toString('base64'), log };
+    const pdfBase64 = pdfBuffer.toString('base64');
+
+    // Convert each PDF page to PNG for vision validation
+    const pngPattern = path.join(tmpDir, 'page-%02d.png');
+    let pageImages = [];
+    try {
+      execSync(
+        `gs -dNOPAUSE -dBATCH -sDEVICE=png16m -r150 -dUseCropBox -sOutputFile=${pngPattern} ${pdfFile}`,
+        { timeout: 30000 }
+      );
+      const pngFiles = fs.readdirSync(tmpDir)
+        .filter(f => f.startsWith('page-') && f.endsWith('.png'))
+        .sort();
+      pageImages = pngFiles.map(f =>
+        fs.readFileSync(path.join(tmpDir, f)).toString('base64')
+      );
+    } catch (e) {
+      console.warn('PNG conversion skipped (gs not available):', e.message);
+    }
+
+    return { success: true, pdfBase64, pageImages, log };
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch(_) {}
   }
@@ -55,7 +77,7 @@ const server = http.createServer((req, res) => {
         }
         console.log(`[${new Date().toISOString()}] Compiling LaTeX (${latexSource.length} chars)`);
         const result = compileLaTeX(latexSource);
-        console.log(`[${new Date().toISOString()}] OK — PDF ${result.pdfBase64.length} chars`);
+        console.log(`[${new Date().toISOString()}] OK — PDF ${result.pdfBase64.length} chars, ${result.pageImages.length} page image(s)`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       } catch (err) {
