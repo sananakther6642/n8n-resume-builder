@@ -4,9 +4,11 @@ RUN apk add --no-cache \
     texlive \
     texmf-dist-latexextra \
     texmf-dist-fontsrecommended \
-    perl
+    perl \
+    ghostscript
 
 RUN pdflatex --version
+RUN gs --version
 
 WORKDIR /app
 COPY server.js .
