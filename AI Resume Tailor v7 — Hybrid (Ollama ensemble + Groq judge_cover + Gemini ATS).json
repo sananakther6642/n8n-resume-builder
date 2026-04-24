@@ -831,7 +831,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://latex-service:3000/compile",
+        "url": "http://host.docker.internal:3000/compile",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -900,7 +900,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://latex-service:3000/compile",
+        "url": "http://host.docker.internal:3000/compile",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -1428,7 +1428,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://latex-service:3000/compile",
+        "url": "http://host.docker.internal:3000/compile",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
