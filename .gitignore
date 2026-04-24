@@ -1,6 +1,8 @@
 .DS_Store
 node_modules/
 .env
+.env.*
+!.env.example
 *.log
 *.bak
 *.bak*
@@ -20,3 +22,19 @@ __pycache__/
 env/
 venv/
 .DS_Store
+
+# Secrets and credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
+
+# Local/editor state
+.idea/
+.envrc
