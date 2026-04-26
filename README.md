@@ -7,9 +7,9 @@ Automated resume tailoring pipeline built on [n8n](https://n8n.io). Upload your 
 1. **Form trigger** — upload your `.tex` resume, paste the job description, set your ATS threshold
 2. **Resume optimization** — Ollama (qwen2.5:3b) ensemble rewrites each bullet against the JD; source LaTeX structure preserved (hrefs, itemize, role headers); garbage model output falls back to source
 3. **Summary rewrite** — injects 4-6 high-value JD keywords, ATS-optimized prose
-4. **Cover letter** — Gemini generates a recruiter-POV cover letter (Hook / Proof / Alignment / Close)
-5. **ATS scoring** — Gemini scores keyword match, section breakdown, formatting flags
-6. **JD scoring** — Groq judges resume fit vs role requirements
+4. **Cover letter** — qwen2.5:3b generates a recruiter-POV cover letter (Hook / Proof / Alignment / Close)
+5. **ATS scoring** — deterministic ATS scorer computes keyword match, section breakdown, and formatting flags
+6. **JD scoring** — qwen2.5:3b judge scores resume fit vs role requirements
 7. **Vision audit** — rendered PDF pages converted to PNG, passed to vision model for layout validation
 8. **Email delivery** — resume PDF + cover letter PDF + score report sent to your inbox
 
@@ -18,9 +18,9 @@ Automated resume tailoring pipeline built on [n8n](https://n8n.io). Upload your 
 | Component | Role |
 |-----------|------|
 | n8n | Workflow orchestration |
-| Ollama (qwen2.5:3b) | Local resume section rewriting |
-| Groq | Ground truth verification, JD scoring, cover letter judging |
-| Gemini | ATS analysis, cover letter generation, vision audit |
+| Ollama (qwen2.5:3b) | Local section rewriting, cover letter generation, ground-truth verification, JD scoring |
+| Deterministic ATS scorer (n8n code node) | Local keyword/format ATS scoring (no external API) |
+| Ollama (llava) | Vision audit for rendered resume pages |
 | latex-service | Sidecar HTTP service — compiles LaTeX → PDF + PNG page images |
 | Ghostscript | PDF → PNG conversion inside latex-service |
 | SMTP | Email delivery |
@@ -31,8 +31,7 @@ Automated resume tailoring pipeline built on [n8n](https://n8n.io). Upload your 
 
 - Docker + Docker Compose
 - Ollama running locally with `qwen2.5:3b` pulled (`ollama pull qwen2.5:3b`)
-- Groq API key
-- Google Gemini API key
+- Ollama running locally with `llava` pulled (`ollama pull llava`)
 - SMTP credentials
 
 ### Run
@@ -47,13 +46,12 @@ n8n available at `http://localhost:5678`.
 
 1. Open n8n → **Workflows** → **Import from file**
 2. Select `AI Resume Tailor v7 — Hybrid (Ollama ensemble + Groq judge_cover + Gemini ATS).json`
-3. Configure credentials in n8n (Groq, Gemini, SMTP)
+3. Configure credentials in n8n (Header Auth account for local Ollama, SMTP)
 4. Activate the workflow
 
 ### Credentials to configure in n8n
 
-- **Groq** — HTTP Header Auth with your Groq API key
-- **Gemini** — HTTP Header Auth with your Gemini API key
+- **Header Auth account** — HTTP Header Auth used by HTTP nodes calling local Ollama (`Authorization: Bearer ollama`)
 - **SMTP** — Email node credentials for delivery
 
 ## Usage
@@ -81,4 +79,6 @@ n8n available at `http://localhost:5678`.
 
 - Ollama must be reachable from Docker via `host.docker.internal` (configured in `docker-compose.yml`)
 - latex-service exposes port 3000 internally only; n8n calls it via Docker network
-- All AI credentials stored in n8n credential store — never in the workflow JSON
+- n8n credentials are referenced by node name/id; secrets remain in n8n credential storage (not embedded in this repo)
+- The workflow is designed for extensibility — you can swap out the ATS scorer, add more LLM-based analysis nodes, or integrate additional data sources as needed
+
