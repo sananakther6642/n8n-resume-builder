@@ -1,5 +1,5 @@
 {
-  "name": "AI Resume Tailor v7 — Hybrid (Ollama ensemble + Groq judge/cover + Gemini ATS)",
+  "name": "AI Resume Tailor v7 — Hybrid (Ollama Qwen ensemble + Qwen judge/cover + Deterministic ATS)",
   "nodes": [
     {
       "parameters": {
@@ -148,7 +148,7 @@
         "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\nfunction extract(name) { const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i'); const m = src.match(re); return m ? m[1].trim() : ''; }\nconst summarySrc = extract('Summary') || '';\nconst body = {\n  model: 'qwen2.5:3b',\n  max_tokens: 350, temperature: 0.2,\n  stream: false,\n  messages: [\n    { role: 'system', content: `Rewrite the resume Summary as plain text (3-4 sentences, 55-85 words) optimized for ATS keyword matching. HARD RULES:\\n1. Use ONLY facts present in SOURCE (degrees, employers, years of experience, tools in SOURCE).\\n2. Weave 4-6 high-value keywords from JD into the prose naturally (technology names, domain terms, responsibilities).\\n3. Lead with role-aligned positioning: years of experience + target role domain.\\n4. Active voice. Third person. No first-person pronouns.\\n5. Banned words: passionate, results-driven, team player, synergy, dynamic, go-getter, leverage, cutting-edge.\\n6. Output plain text only (no LaTeX, no quotes, no labels, no markdown).` },\n    { role: 'user', content: `SOURCE Summary:\\n${summarySrc}\\n\\nRESUME (full context):\\n${src}\\n\\nJD:\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "904f3ba3-ab54-459a-a628-bb2e0cbb63f6",
-      "name": "Summary: llama-70b [Builder]",
+      "name": "Summary: qwen2.5:3b (v1) [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -183,7 +183,7 @@
         }
       },
       "id": "ba56cd4f-64f1-4585-be34-18ef8d2a8b02",
-      "name": "Summary: llama-70b",
+      "name": "Summary: qwen2.5:3b (v1)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -224,7 +224,7 @@
         }
       },
       "id": "26a9e2fc-01a0-4e8e-8ea8-ae5f89f45433",
-      "name": "Summary: gemini-2.0-flash",
+      "name": "Summary: qwen2.5:3b (v2)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -240,10 +240,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('(?:Professional\\\\s+)?Experience');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 1400,\n  temperature: 0.1,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Professional Experience section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Keep every role's header line EXACTLY as in SOURCE — \\\\textbf{Title}, \\\\textit{Company}, date ranges, locations. Never change, add, or remove roles/employers/dates.\\n2. For each bullet: keep the underlying FACT from SOURCE (same tool, same action, same scope). Rewrite wording to emphasize JD keywords where truthful.\\n3. Do NOT add new bullets, new tools, new metrics, new achievements.\\n4. Target JD is the position being applied TO — it is NOT past experience.\\n5. Output raw LaTeX only: \\\\textbf, \\\\textit, \\\\begin{itemize}, \\\\item, \\\\hfill. No \\\\documentclass, no prose, no explanation, no markdown fences.\\n6. Preserve the exact structure of SOURCE (role header → itemize → items).` },\n    { role: \"user\", content: `SOURCE (Experience: llama-70b [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('(?:Professional\\\\s+)?Experience');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 1400,\n  temperature: 0.1,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Professional Experience section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Keep every role's header line EXACTLY as in SOURCE — \\\\textbf{Title}, \\\\textit{Company}, date ranges, locations. Never change, add, or remove roles/employers/dates.\\n2. For each bullet: keep the underlying FACT from SOURCE (same tool, same action, same scope). Rewrite wording to emphasize JD keywords where truthful.\\n3. Do NOT add new bullets, new tools, new metrics, new achievements.\\n4. Target JD is the position being applied TO — it is NOT past experience.\\n5. Output raw LaTeX only: \\\\textbf, \\\\textit, \\\\begin{itemize}, \\\\item, \\\\hfill. No \\\\documentclass, no prose, no explanation, no markdown fences.\\n6. Preserve the exact structure of SOURCE (role header → itemize → items).` },\n    { role: \"user\", content: `SOURCE (Experience: qwen2.5:3b (v1) [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "dd35ce73-5ce9-4db9-b210-55707efa0642",
-      "name": "Experience: llama-70b [Builder]",
+      "name": "Experience: qwen2.5:3b (v1) [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -278,7 +278,7 @@
         }
       },
       "id": "cfd6e1da-ae66-40d5-8e06-e4fd61646bc6",
-      "name": "Experience: llama-70b",
+      "name": "Experience: qwen2.5:3b (v1)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -321,7 +321,7 @@
         }
       },
       "id": "c7f62e74-7af9-4a6a-a84c-6c3c0da3c415",
-      "name": "Experience: gemini-2.0-flash",
+      "name": "Experience: qwen2.5:3b (v2)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -339,10 +339,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('Skills');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 600,\n  temperature: 0.2,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Skills section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Output ONLY skills already present in SOURCE.\\n2. Reorder so JD-relevant skills appear first. Group logically (Languages, Frameworks, Tools, Domain).\\n3. Do not add skills not in SOURCE. Do not remove skills from SOURCE.\\n4. Output raw LaTeX only: \\\\begin{itemize}, \\\\item, \\\\textbf. No \\\\documentclass, no prose, no fences.\\n5. Preserve category labels from SOURCE where present.` },\n    { role: \"user\", content: `SOURCE (Skills: llama-70b [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('Skills');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 600,\n  temperature: 0.2,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Skills section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Output ONLY skills already present in SOURCE.\\n2. Reorder so JD-relevant skills appear first. Group logically (Languages, Frameworks, Tools, Domain).\\n3. Do not add skills not in SOURCE. Do not remove skills from SOURCE.\\n4. Output raw LaTeX only: \\\\begin{itemize}, \\\\item, \\\\textbf. No \\\\documentclass, no prose, no fences.\\n5. Preserve category labels from SOURCE where present.` },\n    { role: \"user\", content: `SOURCE (Skills: qwen2.5:3b (v1) [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "fafbd2be-f6ef-4a44-aa1b-f0364bbd9523",
-      "name": "Skills: llama-70b [Builder]",
+      "name": "Skills: qwen2.5:3b (v1) [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -377,7 +377,7 @@
         }
       },
       "id": "cfa37393-ddf2-4b97-9291-278a1bb620c4",
-      "name": "Skills: llama-70b",
+      "name": "Skills: qwen2.5:3b (v1)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -418,7 +418,7 @@
         }
       },
       "id": "c2434b48-4b50-4dbe-a7e8-2b643962a8c9",
-      "name": "Skills: gemini-2.0-flash",
+      "name": "Skills: qwen2.5:3b (v2)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -436,10 +436,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('Projects');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 900,\n  temperature: 0.2,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Projects section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Keep every project title EXACTLY as in SOURCE (\\\\textbf{Name}, dataset names, tech stack mentions).\\n2. Keep the same projects — no additions, no removals, no renames.\\n3. Rewrite only the descriptive text to surface JD-aligned keywords where truthful. Do not invent tools, metrics, or outcomes.\\n4. Output raw LaTeX only: \\\\begin{itemize}, \\\\item, \\\\textbf, \\\\textit. No \\\\documentclass, no prose, no fences.\\n5. Preserve the original structure.` },\n    { role: \"user\", content: `SOURCE (Projects: llama-70b [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('Projects');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 900,\n  temperature: 0.2,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Projects section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Keep every project title EXACTLY as in SOURCE (\\\\textbf{Name}, dataset names, tech stack mentions).\\n2. Keep the same projects — no additions, no removals, no renames.\\n3. Rewrite only the descriptive text to surface JD-aligned keywords where truthful. Do not invent tools, metrics, or outcomes.\\n4. Output raw LaTeX only: \\\\begin{itemize}, \\\\item, \\\\textbf, \\\\textit. No \\\\documentclass, no prose, no fences.\\n5. Preserve the original structure.` },\n    { role: \"user\", content: `SOURCE (Projects: qwen2.5:3b (v1) [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "73f0358f-042b-434f-985f-3bf989ba9846",
-      "name": "Projects: llama-70b [Builder]",
+      "name": "Projects: qwen2.5:3b (v1) [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -474,7 +474,7 @@
         }
       },
       "id": "6323e676-b642-4533-b6ef-d2c6a47d25d4",
-      "name": "Projects: llama-70b",
+      "name": "Projects: qwen2.5:3b (v1)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -493,7 +493,7 @@
         "jsCode": "const data = $input.first().json;\nconst resumeSrc = data.resumeLatexSource || data.resumeText || '';\n\nconst SYSTEM = `You are writing a cover letter from a candidate to a hiring team. Read as if you are the recruiter — is this candidate excited? Grounded? Did they study the JD?\n\nSTRUCTURE (exactly 4 paragraphs, 280-340 words, NO salutation, NO sign-off):\n\nP1 — Hook: Why this specific company + specific role excites the candidate. Name the company. Name the role. Reference ONE concrete product/team/domain detail from the JD. Show genuine interest, not generic praise.\n\nP2 — Proof: ONE concrete experience from RESUME that directly maps to JD responsibilities. Use the company + timeframe. Quantify ONLY what the RESUME already quantifies.\n\nP3 — Alignment + growth: 3 specific tools or skills from RESUME that match JD. Then state ONE capability the candidate is actively learning or wants to develop in this role — frame as forward-looking ambition tied to the JD.\n\nP4 — Close: Availability, eagerness to contribute, specific call to action (e.g., initial conversation). End with a confident future-oriented line.\n\nTONE: Professional + warm. Show passion through SPECIFICS, not adjectives. Active voice. Recruiter should feel the candidate actually read the JD and is energized — not a templated apology.\n\nHARD BANS:\n- No placeholder text like [Company Name], [Previous Company], [Position].\n- No generic phrases: \"I am excited to\", \"passionate about\", \"leverage\", \"results-driven\", \"team player\".\n- No em-dashes.\n- No salutation (Dear...), no sign-off (Sincerely...).\n- No invented employers, tools, degrees, metrics.`;\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 1200,\n  temperature: 0.75,\n  stream: false,\n  messages: [\n    { role: \"system\", content: SYSTEM },\n    { role: \"user\", content: `CANDIDATE NAME: ${data.fullName}\\nCURRENT ROLE: ${data.currentTitle} at ${data.currentCompany}\\nTARGET ROLE: ${data.jobTitle} at ${data.company}\\n\\nRESUME (source of truth — only draw from this):\\n${resumeSrc}\\n\\n=== END RESUME ===\\n\\nJD (extract company details + 3-4 keywords):\\n${data.jd}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "8d4ce40a-8211-4b44-b267-a73bf447bf4c",
-      "name": "Cover Letter: gemini (humanized) [Builder]",
+      "name": "Cover Letter: qwen2.5:3b (humanized) [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -528,7 +528,7 @@
         }
       },
       "id": "6b2abb5f-b9c6-441b-95b1-e73c34e7ed6c",
-      "name": "Cover Letter: gemini (humanized)",
+      "name": "Cover Letter: qwen2.5:3b (humanized)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -544,7 +544,7 @@
     },
     {
       "parameters": {
-        "jsCode": "function getText(r) {\n  try {\n    if (r.choices)    return r.choices[0].message.content || '';\n    if (r.candidates) return r.candidates[0].content.parts[0].text || '';\n    return '';\n  } catch(e) { return ''; }\n}\n\nfunction clean(t) { \n  return t.replace(/^```latex\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim(); \n}\n\nfunction safeGet(nodeName) {\n  try { \n    const raw = $(nodeName).first().json;\n    const text = getText(raw);\n    const cleaned = clean(text);\n    // Return raw text if clean() removes too much\n    return (cleaned && cleaned.length > 10) ? cleaned : text;\n  } catch(e) { return ''; }\n}\n\nconst base = $('Merge All Confirmed Data').first().json;\n\nconst candidates = {\n  summary:    [ safeGet('Summary: llama-70b'),    safeGet('Summary: gemini-2.0-flash')    ],\n  experience: [ safeGet('Experience: llama-70b'), safeGet('Experience: gemini-2.0-flash') ],\n  skills:     [ safeGet('Skills: llama-70b'),     safeGet('Skills: gemini-2.0-flash')     ],\n  projects:   [ safeGet('Projects: llama-70b'),   safeGet('Projects: gemini-2.0-flash')   ],\n};\n\n// Soft validation — use first non-empty candidate, never throw\nfor (const [section, cands] of Object.entries(candidates)) {\n  const valid = cands.filter(c => c && c.trim().length > 10);\n  if (valid.length === 0) {\n    // Use whatever we got, even if short\n    const any = cands.find(c => c && c.trim().length > 0);\n    if (any) {\n      candidates[section] = [any, any];\n    }\n    // If truly empty, let Judge handle it\n  }\n}\n\nreturn [{ json: { ...base, candidates } }];"
+        "jsCode": "function getText(r) {\n  try {\n    if (r.choices)    return r.choices[0].message.content || '';\n    if (r.candidates) return r.candidates[0].content.parts[0].text || '';\n    return '';\n  } catch(e) { return ''; }\n}\n\nfunction clean(t) { \n  return t.replace(/^```latex\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim(); \n}\n\nfunction safeGet(nodeName) {\n  try { \n    const raw = $(nodeName).first().json;\n    const text = getText(raw);\n    const cleaned = clean(text);\n    // Return raw text if clean() removes too much\n    return (cleaned && cleaned.length > 10) ? cleaned : text;\n  } catch(e) { return ''; }\n}\n\nconst base = $('Merge All Confirmed Data').first().json;\n\nconst candidates = {\n  summary:    [ safeGet('Summary: qwen2.5:3b (v1)'),    safeGet('Summary: qwen2.5:3b (v2)')    ],\n  experience: [ safeGet('Experience: qwen2.5:3b (v1)'), safeGet('Experience: qwen2.5:3b (v2)') ],\n  skills:     [ safeGet('Skills: qwen2.5:3b (v1)'),     safeGet('Skills: qwen2.5:3b (v2)')     ],\n  projects:   [ safeGet('Projects: qwen2.5:3b (v1)'),   safeGet('Projects: qwen2.5:3b (v2)')   ],\n};\n\n// Soft validation — use first non-empty candidate, never throw\nfor (const [section, cands] of Object.entries(candidates)) {\n  const valid = cands.filter(c => c && c.trim().length > 10);\n  if (valid.length === 0) {\n    // Use whatever we got, even if short\n    const any = cands.find(c => c && c.trim().length > 0);\n    if (any) {\n      candidates[section] = [any, any];\n    }\n    // If truly empty, let Judge handle it\n  }\n}\n\nreturn [{ json: { ...base, candidates } }];"
       },
       "id": "b87fcf3a-5abe-46a1-ae24-e3cc0d19bc5a",
       "name": "Collect All Candidates",
@@ -818,7 +818,7 @@
         "jsCode": "// Deterministic ATS scorer — bilingual, tech-term first.\nconst data = $('Assemble Document').first().json;\nconst jdRaw = data.jd || '';\nconst sections = data.sections || {};\n\n// German + English stopwords (lowercase, folded).\nconst STOP = new Set([\n  'the','a','an','and','or','of','to','in','on','for','with','is','are','be','as','by','at','from','this','that','will','we','you','our','your','their','it','its','he','she','they','i','me','my','have','has','had','was','were','been','but','not','can','do','does','did','who','what','which','where','when','how','any','all','more','than','some','each','also','such','so','if','may','must','should','would','could','into','over','per','via','about','between','among','during','both','either','neither','other','own','same','new','us','them','etc',\n  // German\n  'der','die','das','den','dem','des','ein','eine','einer','eines','einem','einen','und','oder','aber','denn','weil','dass','dass','ob','als','wie','wo','wann','warum','wenn','mit','ohne','fur','uber','unter','gegen','bei','nach','von','vor','zu','zum','zur','im','ins','am','an','auf','aus','ist','sind','war','waren','wird','wurde','werden','sein','seine','seiner','seinen','seinem','seines','ihr','ihre','ihrer','ihren','ihrem','ihres','nicht','nur','auch','noch','schon','sehr','mehr','weniger','gut','gute','guten','jede','jeder','jedes','alle','alles','einige','kein','keine','keinen','keiner','keinem','keines','man','wir','sie','er','es','ich','du','mich','dich','uns','euch','sich','mein','dein','unser','euer','diese','dieser','dieses','diesen','diesem','welche','welcher','welches','welchen','welchem','hat','haben','hatte','hatten','kann','konnen','konnte','konnten','soll','sollen','sollte','sollten','will','wollen','wollte','wollten','muss','mussen','musste','mussten','im','nstlichen','nstliche'\n]);\n\n// Fold umlauts, strip diacritics — makes German & English comparable.\nfunction fold(s) {\n  if (!s) return '';\n  return s\n    .replace(/ä/g,'a').replace(/Ä/g,'A')\n    .replace(/ö/g,'o').replace(/Ö/g,'O')\n    .replace(/ü/g,'u').replace(/Ü/g,'U')\n    .replace(/ß/g,'ss')\n    .normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');\n}\n\nfunction tokens(text) {\n  return fold(text || '').toLowerCase()\n    .replace(/[^a-z0-9+\\-.#/ ]/g,' ')\n    .split(/\\s+/)\n    .filter(w => w.length > 1 && !STOP.has(w));\n}\n\nconst jdFolded = fold(jdRaw).toLowerCase();\nconst jdToks = tokens(jdRaw);\n\n// Known tech lexicon — single terms that count as keywords when present.\nconst TECH_LEX = [\n  'python','java','javascript','typescript','c++','c#','matlab','fortran','r','go','rust','scala','ruby','php','swift','kotlin',\n  'pytorch','tensorflow','keras','numpy','pandas','scikit-learn','sklearn','scipy','jax','hugging-face','transformers','langchain',\n  'react','angular','vue','node','nodejs','express','django','flask','fastapi','spring','laravel','rails',\n  'sql','mysql','postgres','postgresql','mongodb','redis','cassandra','elasticsearch','kafka','rabbitmq',\n  'docker','kubernetes','k8s','terraform','ansible','jenkins','gitlab','github','git','ci/cd',\n  'aws','azure','gcp','cloud','linux','unix','bash','shell','windows',\n  'machine-learning','deep-learning','neural','nlp','cv','vision','llm','gpt','bert','cnn','rnn','lstm','transformer','rag',\n  'ai','ml','ki','dl','data','analytics','statistics','mathematics','physics','engineering','algorithm','optimization','optimisation',\n  'fem','cae','cfd','finite-elemente','finite-element','simulation','simulationsdaten','cad','ansys','abaqus','catia','solidworks','nastran','lsdyna','openfoam','comsol',\n  'automotive','embedded','iot','rest','api','graphql','microservice','microservices','distributed','parallel','gpu','cuda',\n  'scrum','agile','kanban','jira','confluence',\n  'mlops','devops','mle','sre'\n];\nconst TECH_SET = new Set(TECH_LEX.map(fold));\n\n// Collect keywords from JD: tech-lex hits first, then hyphenated/compound, then salient phrases.\nconst jdWords = new Set(jdToks);\nconst keywords = [];\nconst pushed = new Set();\n\nfunction push(term, priority) {\n  const k = term.trim();\n  if (!k || pushed.has(k)) return;\n  pushed.add(k);\n  keywords.push({ term: k, priority });\n}\n\n// 1) Tech lexicon hits.\nfor (const t of TECH_LEX) {\n  const folded = fold(t);\n  if (jdFolded.includes(folded)) push(folded, 'HIGH');\n}\n\n// 2) Hyphenated compounds in JD (typical tech terms).\nconst hyphRe = /[a-z0-9]+(?:-[a-z0-9]+){1,3}/g;\nlet m;\nwhile ((m = hyphRe.exec(jdFolded)) !== null) {\n  if (m[0].length >= 5 && !STOP.has(m[0])) push(m[0], 'MEDIUM');\n}\n\n// 3) Capitalized acronyms (3-5 uppercase letters) from raw JD.\nconst acroRe = /\\b[A-Z]{2,6}\\b/g;\nwhile ((m = acroRe.exec(jdRaw)) !== null) {\n  const a = fold(m[0]).toLowerCase();\n  if (a.length >= 2 && !STOP.has(a)) push(a, 'MEDIUM');\n}\n\n// 4) Frequent meaningful single words (length >= 5, not stop, freq >= 2).\nconst freq = new Map();\nfor (const t of jdToks) {\n  if (t.length >= 5 && !STOP.has(t)) freq.set(t, (freq.get(t) || 0) + 1);\n}\nfor (const [t, c] of freq.entries()) {\n  if (c >= 2) push(t, 'LOW');\n}\n\n// Cap to top 25, sorted HIGH > MEDIUM > LOW.\nconst PRI = { HIGH: 3, MEDIUM: 2, LOW: 1 };\nkeywords.sort((a, b) => PRI[b.priority] - PRI[a.priority]);\nconst keywordSet = keywords.slice(0, 25);\n\n// Build resume corpus (folded).\nconst resumeAll = fold([sections.summary, sections.experience, sections.skills, sections.projects].filter(Boolean).join(' ')).toLowerCase();\n\nconst matched = [];\nconst missing = [];\nfor (const kw of keywordSet) {\n  // Treat hyphen and space as interchangeable.\n  const needles = [kw.term, kw.term.replace(/-/g,' '), kw.term.replace(/-/g,'')];\n  const present = needles.some(n => n && resumeAll.includes(n));\n  if (present) matched.push(kw.term);\n  else missing.push({\n    keyword: kw.term,\n    importance: kw.priority,\n    suggested_insertion: kw.priority === 'HIGH' ? 'Skills and Experience' : 'Skills section'\n  });\n}\n\nconst keyword_match_percent = keywordSet.length > 0\n  ? Math.round((matched.length / keywordSet.length) * 100)\n  : 0;\n\nfunction sectionScore(name, text) {\n  if (!text) return { score: 0, feedback: 'Section empty.' };\n  const lc = fold(text).toLowerCase();\n  const hits = keywordSet.filter(k => {\n    const needles = [k.term, k.term.replace(/-/g,' '), k.term.replace(/-/g,'')];\n    return needles.some(n => n && lc.includes(n));\n  }).length;\n  const score = keywordSet.length ? Math.round((hits / keywordSet.length) * 100) : 50;\n  const wc = text.split(/\\s+/).length;\n  let fb = `${hits}/${keywordSet.length} JD keywords present; ${wc} words.`;\n  if (score < 30) fb += ' Weak — add more JD-aligned terms.';\n  else if (score < 60) fb += ' Moderate coverage.';\n  else fb += ' Strong coverage.';\n  return { score, feedback: fb };\n}\n\nconst section_breakdown = {\n  summary:    sectionScore('summary',    sections.summary),\n  experience: sectionScore('experience', sections.experience),\n  skills:     sectionScore('skills',     sections.skills),\n  projects:   sectionScore('projects',   sections.projects)\n};\n\nconst latex = data.latex || '';\nconst formatting_flags = [];\nif (/\\\\begin\\{table\\}/.test(latex))    formatting_flags.push({ issue: 'Contains tables (ATS parsers may misread)', severity: 'MEDIUM', fix: 'Convert tables to plain text lists.' });\nif (/\\\\begin\\{tabular\\}/.test(latex))  formatting_flags.push({ issue: 'Contains tabular environments', severity: 'MEDIUM', fix: 'Use itemize for structured content.' });\nif (/\\\\includegraphics/.test(latex))     formatting_flags.push({ issue: 'Embedded images/graphics', severity: 'HIGH', fix: 'Remove graphics — ATS cannot parse them.' });\nif (!/\\\\section\\{Education\\}/.test(latex)) formatting_flags.push({ issue: 'No Education section detected', severity: 'HIGH', fix: 'Add an Education section.' });\n\nconst weak_sections = Object.entries(section_breakdown).filter(([,v]) => v.score < 50).map(([k]) => k);\n\nconst ats_score = Math.round(\n  0.6 * keyword_match_percent +\n  0.3 * (Object.values(section_breakdown).reduce((a,v)=>a+v.score,0) / 4) +\n  0.1 * (formatting_flags.length === 0 ? 100 : Math.max(0, 100 - formatting_flags.length*20))\n);\n\nconst pass_verdict = ats_score >= 75 ? 'PASS' : ats_score >= 50 ? 'WARN' : 'FAIL';\nconst overall_recommendation = ats_score >= 75\n  ? 'Resume passes ATS keyword threshold.'\n  : `Improve weak sections (${weak_sections.join(', ') || 'none'}) and add high-priority missing keywords: ${missing.filter(k=>k.importance==='HIGH').slice(0,8).map(k=>k.keyword).join(', ') || 'none listed'}.`;\n\nconst atsJson = {\n  ats_score,\n  pass_verdict,\n  keyword_match_percent,\n  matched_keywords: matched,\n  missing_keywords: missing,\n  section_breakdown,\n  formatting_flags,\n  weak_sections,\n  overall_recommendation\n};\n\nreturn [{\n  json: {\n    ...data,\n    choices: [{ message: { content: JSON.stringify(atsJson) } }],\n    atsJson\n  }\n}];"
       },
       "id": "66b7d9b7-19e3-4b49-86bc-5648e3a53017",
-      "name": "Gemini: ATS Analysis",
+      "name": "ATS Analysis (Deterministic)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -968,7 +968,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const base = $('Merge All Confirmed Data').first().json;\nconst assembled = $('Assemble Document').first().json;\n\n// Get Score response directly from node\nlet score = {};\ntry {\n  const scoreRaw = $('Score vs JD').first().json;\n  let r = scoreRaw.choices?.[0]?.message?.content || '{}';\n  r = r.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  score = JSON.parse(r);\n} catch(e) { score = { score: 'N/A', verdict: 'Scoring failed', strengths: [], gaps: [], recommendation: '' }; }\n\n// Get ATS response directly from node\nlet ats = {};\ntry {\n  const atsRaw = $('Gemini: ATS Analysis').first().json;\n  let r = atsRaw.choices?.[0]?.message?.content || atsRaw.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  r = r.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  ats = JSON.parse(r);\n} catch(e) { ats = { ats_score: 0, pass_verdict: 'ERROR', keyword_match_percent: 0, matched_keywords: [], missing_keywords: [], section_breakdown: {}, formatting_flags: [], weak_sections: [], overall_recommendation: 'ATS parsing failed.' }; }\n\nlet visionAudit = {};\nlet visionIssuesHtml = '';\ntry {\n  const vd = $('Vision Parse: Resume').first().json;\n  visionAudit = vd.visionAudit || {};\n  visionIssuesHtml = vd.visionIssuesHtml || '';\n} catch(e) { /* vision unavailable */ }\n\nconst atsScore = typeof ats.ats_score === 'number' ? ats.ats_score : 0;\nconst threshold = base.atsThreshold || 75;\nconst needsReopt = atsScore < threshold;\n\nconst missingRows = (ats.missing_keywords||[]).map(k =>\n  '<tr><td style=\"padding:3px 8px\">'+k.keyword+'</td><td style=\"padding:3px 8px;color:'+(k.importance==='HIGH'?'#c0392b':k.importance==='MEDIUM'?'#e67e22':'#27ae60')+'\">'+(k.importance||'')+'</td><td style=\"padding:3px 8px\">'+(k.suggested_insertion||'')+'</td></tr>'\n).join('');\n\nconst flagRows = (ats.formatting_flags||[]).map(f =>\n  '<li><strong>['+(f.severity||'')+']</strong> '+(f.issue||'')+' — <em>'+(f.fix||'')+'</em></li>'\n).join('');\n\nconst sectionAts = Object.entries(ats.section_breakdown||{}).map(([s,d]) =>\n  '<li><strong>'+s+'</strong>: '+(d.score||0)+'/100 — '+(d.feedback||'')+'</li>'\n).join('');\n\nconst vc = ats.pass_verdict==='PASS'?'#27ae60':ats.pass_verdict==='FAIL'?'#c0392b':'#e67e22';\n\nconst reoptBanner = needsReopt\n  ? \"<div style='background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:6px;margin:8px 0'><strong>⚠️ ATS score below threshold (\"+atsScore+\"/100 < \"+threshold+\"/100)</strong> — optimized version will be sent separately.</div>\"\n  : \"<div style='background:#d4edda;border:1px solid #28a745;padding:10px;border-radius:6px;margin:8px 0'><strong>✅ ATS score above threshold (\"+atsScore+\"/100)</strong></div>\";\n\nconst scoreHTML = (assembled.auditHTML||'') +\n  \"<h2>Match Score: \"+score.score+\"/100</h2>\" +\n  \"<p>\"+(score.verdict||'')+\"</p>\" +\n  \"<h3>Strengths</h3><ul>\"+(score.strengths||[]).map(s=>'<li>'+s+'</li>').join('')+\"</ul>\" +\n  \"<h3>Gaps</h3><ul>\"+(score.gaps||[]).map(g=>'<li>'+g+'</li>').join('')+\"</ul>\" +\n  \"<p><strong>Recommendation:</strong> \"+(score.recommendation||'')+\"</p>\" +\n  \"<hr/>\" +\n  \"<h2>ATS Analysis</h2>\" + reoptBanner +\n  \"<table style='border-collapse:collapse'>\" +\n  \"<tr><td style='padding:4px 12px 4px 0'><strong>ATS Score</strong></td><td><strong>\"+atsScore+\"/100</strong></td></tr>\" +\n  \"<tr><td style='padding:4px 12px 4px 0'><strong>Verdict</strong></td><td><span style='color:\"+vc+\";font-weight:bold'>\"+ats.pass_verdict+\"</span></td></tr>\" +\n  \"<tr><td style='padding:4px 12px 4px 0'><strong>Keyword match</strong></td><td>\"+(ats.keyword_match_percent||0)+\"%</td></tr>\" +\n  \"</table>\" +\n  \"<h3>Matched keywords</h3><p>\"+((ats.matched_keywords||[]).join(', ')||'None')+\"</p>\" +\n  \"<h3>Missing keywords</h3>\" +\n  (missingRows ? \"<table style='border-collapse:collapse;width:100%'><thead><tr><th style='text-align:left;padding:3px 8px;border-bottom:1px solid #ddd'>Keyword</th><th style='text-align:left;padding:3px 8px;border-bottom:1px solid #ddd'>Priority</th><th style='text-align:left;padding:3px 8px;border-bottom:1px solid #ddd'>Where to add</th></tr></thead><tbody>\"+missingRows+\"</tbody></table>\" : \"<p>None</p>\") +\n  \"<h3>Section ATS breakdown</h3><ul>\"+sectionAts+\"</ul>\" +\n  \"<h3>Formatting flags</h3><ul>\"+(flagRows||'<li>None</li>')+\"</ul>\" +\n  \"<p><strong>Recommendation:</strong> \"+(ats.overall_recommendation||'')+\"</p>\" +\n  (visionIssuesHtml ? \"<hr/>\" + visionIssuesHtml : '') +\n  \"<hr/><p style='color:#999;font-size:10px'>Ensemble: qwen2.5:3b (4 variants) | Judge: qwen2.5:3b | ATS: deterministic keyword scorer</p>\";\n\nlet pdfBase64 = '';\n// Search all merged items for pdfBase64\nfor (const item of $input.all()) {\n  const v = item.json && item.json.pdfBase64;\n  if (v && v.length > 100) { pdfBase64 = v; break; }\n}\n// Fallback: try first item directly\nif (!pdfBase64 || pdfBase64.length < 100) {\n  const v = $input.first().json.pdfBase64;\n  if (v && v.length > 100) pdfBase64 = v;\n}\n\nreturn [{ json: { ...assembled, score, ats, atsScore, needsReopt, scoreHTML, visionAudit, visionIssuesHtml, runId: assembled.runId || base.runId, pdfBase64 } }];"
+        "jsCode": "const base = $('Merge All Confirmed Data').first().json;\nconst assembled = $('Assemble Document').first().json;\n\n// Get Score response directly from node\nlet score = {};\ntry {\n  const scoreRaw = $('Score vs JD').first().json;\n  let r = scoreRaw.choices?.[0]?.message?.content || '{}';\n  r = r.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  score = JSON.parse(r);\n} catch(e) { score = { score: 'N/A', verdict: 'Scoring failed', strengths: [], gaps: [], recommendation: '' }; }\n\n// Get ATS response directly from node\nlet ats = {};\ntry {\n  const atsRaw = $('ATS Analysis (Deterministic)').first().json;\n  let r = atsRaw.choices?.[0]?.message?.content || atsRaw.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n  r = r.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/\\s*```$/i,'').trim();\n  ats = JSON.parse(r);\n} catch(e) { ats = { ats_score: 0, pass_verdict: 'ERROR', keyword_match_percent: 0, matched_keywords: [], missing_keywords: [], section_breakdown: {}, formatting_flags: [], weak_sections: [], overall_recommendation: 'ATS parsing failed.' }; }\n\nlet visionAudit = {};\nlet visionIssuesHtml = '';\ntry {\n  const vd = $('Vision Parse: Resume').first().json;\n  visionAudit = vd.visionAudit || {};\n  visionIssuesHtml = vd.visionIssuesHtml || '';\n} catch(e) { /* vision unavailable */ }\n\nconst atsScore = typeof ats.ats_score === 'number' ? ats.ats_score : 0;\nconst threshold = base.atsThreshold || 75;\nconst needsReopt = atsScore < threshold;\n\nconst missingRows = (ats.missing_keywords||[]).map(k =>\n  '<tr><td style=\"padding:3px 8px\">'+k.keyword+'</td><td style=\"padding:3px 8px;color:'+(k.importance==='HIGH'?'#c0392b':k.importance==='MEDIUM'?'#e67e22':'#27ae60')+'\">'+(k.importance||'')+'</td><td style=\"padding:3px 8px\">'+(k.suggested_insertion||'')+'</td></tr>'\n).join('');\n\nconst flagRows = (ats.formatting_flags||[]).map(f =>\n  '<li><strong>['+(f.severity||'')+']</strong> '+(f.issue||'')+' — <em>'+(f.fix||'')+'</em></li>'\n).join('');\n\nconst sectionAts = Object.entries(ats.section_breakdown||{}).map(([s,d]) =>\n  '<li><strong>'+s+'</strong>: '+(d.score||0)+'/100 — '+(d.feedback||'')+'</li>'\n).join('');\n\nconst vc = ats.pass_verdict==='PASS'?'#27ae60':ats.pass_verdict==='FAIL'?'#c0392b':'#e67e22';\n\nconst reoptBanner = needsReopt\n  ? \"<div style='background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:6px;margin:8px 0'><strong>⚠️ ATS score below threshold (\"+atsScore+\"/100 < \"+threshold+\"/100)</strong> — optimized version will be sent separately.</div>\"\n  : \"<div style='background:#d4edda;border:1px solid #28a745;padding:10px;border-radius:6px;margin:8px 0'><strong>✅ ATS score above threshold (\"+atsScore+\"/100)</strong></div>\";\n\nconst scoreHTML = (assembled.auditHTML||'') +\n  \"<h2>Match Score: \"+score.score+\"/100</h2>\" +\n  \"<p>\"+(score.verdict||'')+\"</p>\" +\n  \"<h3>Strengths</h3><ul>\"+(score.strengths||[]).map(s=>'<li>'+s+'</li>').join('')+\"</ul>\" +\n  \"<h3>Gaps</h3><ul>\"+(score.gaps||[]).map(g=>'<li>'+g+'</li>').join('')+\"</ul>\" +\n  \"<p><strong>Recommendation:</strong> \"+(score.recommendation||'')+\"</p>\" +\n  \"<hr/>\" +\n  \"<h2>ATS Analysis</h2>\" + reoptBanner +\n  \"<table style='border-collapse:collapse'>\" +\n  \"<tr><td style='padding:4px 12px 4px 0'><strong>ATS Score</strong></td><td><strong>\"+atsScore+\"/100</strong></td></tr>\" +\n  \"<tr><td style='padding:4px 12px 4px 0'><strong>Verdict</strong></td><td><span style='color:\"+vc+\";font-weight:bold'>\"+ats.pass_verdict+\"</span></td></tr>\" +\n  \"<tr><td style='padding:4px 12px 4px 0'><strong>Keyword match</strong></td><td>\"+(ats.keyword_match_percent||0)+\"%</td></tr>\" +\n  \"</table>\" +\n  \"<h3>Matched keywords</h3><p>\"+((ats.matched_keywords||[]).join(', ')||'None')+\"</p>\" +\n  \"<h3>Missing keywords</h3>\" +\n  (missingRows ? \"<table style='border-collapse:collapse;width:100%'><thead><tr><th style='text-align:left;padding:3px 8px;border-bottom:1px solid #ddd'>Keyword</th><th style='text-align:left;padding:3px 8px;border-bottom:1px solid #ddd'>Priority</th><th style='text-align:left;padding:3px 8px;border-bottom:1px solid #ddd'>Where to add</th></tr></thead><tbody>\"+missingRows+\"</tbody></table>\" : \"<p>None</p>\") +\n  \"<h3>Section ATS breakdown</h3><ul>\"+sectionAts+\"</ul>\" +\n  \"<h3>Formatting flags</h3><ul>\"+(flagRows||'<li>None</li>')+\"</ul>\" +\n  \"<p><strong>Recommendation:</strong> \"+(ats.overall_recommendation||'')+\"</p>\" +\n  (visionIssuesHtml ? \"<hr/>\" + visionIssuesHtml : '') +\n  \"<hr/><p style='color:#999;font-size:10px'>Ensemble: qwen2.5:3b (4 variants) | Judge: qwen2.5:3b | ATS: deterministic keyword scorer</p>\";\n\nlet pdfBase64 = '';\n// Search all merged items for pdfBase64\nfor (const item of $input.all()) {\n  const v = item.json && item.json.pdfBase64;\n  if (v && v.length > 100) { pdfBase64 = v; break; }\n}\n// Fallback: try first item directly\nif (!pdfBase64 || pdfBase64.length < 100) {\n  const v = $input.first().json.pdfBase64;\n  if (v && v.length > 100) pdfBase64 = v;\n}\n\nreturn [{ json: { ...assembled, score, ats, atsScore, needsReopt, scoreHTML, visionAudit, visionIssuesHtml, runId: assembled.runId || base.runId, pdfBase64 } }];"
       },
       "id": "7d689ea7-317e-4d42-86c6-37c565042273",
       "name": "Merge Final Output",
@@ -1051,7 +1051,7 @@
         "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\nfunction extract(name) { const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i'); const m = src.match(re); return m ? m[1].trim() : ''; }\nconst summarySrc = extract('Summary') || '';\nconst body = {\n  model: 'qwen2.5:3b',\n  max_tokens: 350, temperature: 0.55,\n  stream: false,\n  messages: [\n    { role: 'system', content: `Rewrite the resume Summary as plain text (3-4 sentences, 55-85 words) optimized for ATS keyword matching. HARD RULES:\\n1. Use ONLY facts present in SOURCE (degrees, employers, years of experience, tools in SOURCE).\\n2. Weave 4-6 high-value keywords from JD into the prose naturally (technology names, domain terms, responsibilities).\\n3. Lead with role-aligned positioning: years of experience + target role domain.\\n4. Active voice. Third person. No first-person pronouns.\\n5. Banned words: passionate, results-driven, team player, synergy, dynamic, go-getter, leverage, cutting-edge.\\n6. Output plain text only (no LaTeX, no quotes, no labels, no markdown).` },\n    { role: 'user', content: `SOURCE Summary:\\n${summarySrc}\\n\\nRESUME (full context):\\n${src}\\n\\nJD:\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "587fbe20-c3c3-40ce-b069-2810281a491d",
-      "name": "Summary: gemini-2.0-flash [Builder]",
+      "name": "Summary: qwen2.5:3b (v2) [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -1061,10 +1061,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('(?:Professional\\\\s+)?Experience');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 1400,\n  temperature: 0.5,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Professional Experience section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Keep every role's header line EXACTLY as in SOURCE — \\\\textbf{Title}, \\\\textit{Company}, date ranges, locations. Never change, add, or remove roles/employers/dates.\\n2. For each bullet: keep the underlying FACT from SOURCE (same tool, same action, same scope). Rewrite wording to emphasize JD keywords where truthful.\\n3. Do NOT add new bullets, new tools, new metrics, new achievements.\\n4. Target JD is the position being applied TO — it is NOT past experience.\\n5. Output raw LaTeX only: \\\\textbf, \\\\textit, \\\\begin{itemize}, \\\\item, \\\\hfill. No \\\\documentclass, no prose, no explanation, no markdown fences.\\n6. Preserve the exact structure of SOURCE (role header → itemize → items).` },\n    { role: \"user\", content: `SOURCE (Experience: gemini-2.0-flash [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('(?:Professional\\\\s+)?Experience');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 1400,\n  temperature: 0.5,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Professional Experience section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Keep every role's header line EXACTLY as in SOURCE — \\\\textbf{Title}, \\\\textit{Company}, date ranges, locations. Never change, add, or remove roles/employers/dates.\\n2. For each bullet: keep the underlying FACT from SOURCE (same tool, same action, same scope). Rewrite wording to emphasize JD keywords where truthful.\\n3. Do NOT add new bullets, new tools, new metrics, new achievements.\\n4. Target JD is the position being applied TO — it is NOT past experience.\\n5. Output raw LaTeX only: \\\\textbf, \\\\textit, \\\\begin{itemize}, \\\\item, \\\\hfill. No \\\\documentclass, no prose, no explanation, no markdown fences.\\n6. Preserve the exact structure of SOURCE (role header → itemize → items).` },\n    { role: \"user\", content: `SOURCE (Experience: qwen2.5:3b (v2) [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "f1cad2bf-3c7b-435d-aa6a-4a18c11b667c",
-      "name": "Experience: gemini-2.0-flash [Builder]",
+      "name": "Experience: qwen2.5:3b (v2) [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -1074,10 +1074,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('Skills');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 600,\n  temperature: 0.5,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Skills section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Output ONLY skills already present in SOURCE.\\n2. Reorder so JD-relevant skills appear first. Group logically (Languages, Frameworks, Tools, Domain).\\n3. Do not add skills not in SOURCE. Do not remove skills from SOURCE.\\n4. Output raw LaTeX only: \\\\begin{itemize}, \\\\item, \\\\textbf. No \\\\documentclass, no prose, no fences.\\n5. Preserve category labels from SOURCE where present.` },\n    { role: \"user\", content: `SOURCE (Skills: gemini-2.0-flash [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('Skills');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 600,\n  temperature: 0.5,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Skills section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Output ONLY skills already present in SOURCE.\\n2. Reorder so JD-relevant skills appear first. Group logically (Languages, Frameworks, Tools, Domain).\\n3. Do not add skills not in SOURCE. Do not remove skills from SOURCE.\\n4. Output raw LaTeX only: \\\\begin{itemize}, \\\\item, \\\\textbf. No \\\\documentclass, no prose, no fences.\\n5. Preserve category labels from SOURCE where present.` },\n    { role: \"user\", content: `SOURCE (Skills: qwen2.5:3b (v2) [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "e3fae6d6-351d-4f32-9ff2-618caf360ebb",
-      "name": "Skills: gemini-2.0-flash [Builder]",
+      "name": "Skills: qwen2.5:3b (v2) [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -1087,10 +1087,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('Projects');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 900,\n  temperature: 0.5,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Projects section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Keep every project title EXACTLY as in SOURCE (\\\\textbf{Name}, dataset names, tech stack mentions).\\n2. Keep the same projects — no additions, no removals, no renames.\\n3. Rewrite only the descriptive text to surface JD-aligned keywords where truthful. Do not invent tools, metrics, or outcomes.\\n4. Output raw LaTeX only: \\\\begin{itemize}, \\\\item, \\\\textbf, \\\\textit. No \\\\documentclass, no prose, no fences.\\n5. Preserve the original structure.` },\n    { role: \"user\", content: `SOURCE (Projects: gemini-2.0-flash [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
+        "jsCode": "const data = $input.first().json;\nconst jd = data.jd || '';\nconst src = data.resumeLatexSource || '';\n\nfunction extract(name) {\n  const re = new RegExp('\\\\\\\\section\\\\*?\\\\{\\\\s*' + name + '\\\\s*\\\\}([\\\\s\\\\S]*?)(?=\\\\\\\\section\\\\*?\\\\{|\\\\\\\\end\\\\{document\\\\})', 'i');\n  const m = src.match(re);\n  return m ? m[1].trim() : '';\n}\n\nconst sourceSection = extract('Projects');\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 900,\n  temperature: 0.5,\n  stream: false,\n  messages: [\n    { role: \"system\", content: `You rewrite a resume's Projects section to align with a target JD.\\n\\nSTRICT RULES:\\n1. Keep every project title EXACTLY as in SOURCE (\\\\textbf{Name}, dataset names, tech stack mentions).\\n2. Keep the same projects — no additions, no removals, no renames.\\n3. Rewrite only the descriptive text to surface JD-aligned keywords where truthful. Do not invent tools, metrics, or outcomes.\\n4. Output raw LaTeX only: \\\\begin{itemize}, \\\\item, \\\\textbf, \\\\textit. No \\\\documentclass, no prose, no fences.\\n5. Preserve the original structure.` },\n    { role: \"user\", content: `SOURCE (Projects: qwen2.5:3b (v2) [Builder] section of the resume, copy its structure):\\n${sourceSection || '(section absent in source — return empty)'}\\n\\n=== END SOURCE ===\\n\\nJD (keywords to align with — NOT a description of past work):\\n${jd}\\n\\nTarget role: ${data.jobTitle} at ${data.company}` }\n  ]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "4f540166-8d60-4314-ada2-83ec5ba0d8ed",
-      "name": "Projects: gemini-2.0-flash [Builder]",
+      "name": "Projects: qwen2.5:3b (v2) [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -1103,7 +1103,7 @@
         "jsCode": "const data = $input.first().json;\nconst prompt = `You are a resume accuracy auditor. Compare SYNTHESISED sections against ORIGINAL RESUME and identify hallucinated content.\n\nReturn ONLY valid JSON (no markdown):\n{\"experience_violations\":[{\"synthesised_bullet\":\"\",\"violation_type\":\"added_tool\",\"explanation\":\"\",\"original_bullet\":\"\"}],\"project_violations\":[{\"synthesised_bullet\":\"\",\"violation_type\":\"added_tool\",\"explanation\":\"\",\"original_text\":\"\"}],\"summary_violations\":[],\"total_violations\":0,\"verdict\":\"CLEAN\"}\n\nDO NOT flag: rephrasing, reordering, JD vocabulary for same concept.\nDO flag: tools not in original, metrics not in original, inflated outcomes.\n\nORIGINAL RESUME:\n${data.resumeWithDates}\n\nSYNTHESISED EXPERIENCE:\n${data.sections.experience}\n\nSYNTHESISED PROJECTS:\n${data.sections.projects}\n\nSYNTHESISED SUMMARY:\n${data.sections.summary}`;\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 2000,\n  temperature: 0.0,\n  messages: [{ role: 'user', content: prompt }]\n};\nreturn [{ json: { ...data, _groqBody: JSON.stringify(body) } }];"
       },
       "id": "2da4aaf3-b6b6-4735-a9fc-2507adfe18e7",
-      "name": "Gemini: Ground Truth Verification [Builder]",
+      "name": "Qwen: Ground Truth Verification [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -1116,7 +1116,7 @@
         "jsCode": "const data = $('Assemble Document').first().json;\nconst prompt = `ATS expert analysis. Return ONLY valid JSON (no markdown, no code fences):\n{\"ats_score\":0,\"pass_verdict\":\"PASS\",\"keyword_match_percent\":0,\"matched_keywords\":[],\"missing_keywords\":[{\"keyword\":\"\",\"importance\":\"HIGH\",\"suggested_insertion\":\"\"}],\"section_breakdown\":{\"summary\":{\"score\":0,\"feedback\":\"\"},\"experience\":{\"score\":0,\"feedback\":\"\"},\"skills\":{\"score\":0,\"feedback\":\"\"},\"projects\":{\"score\":0,\"feedback\":\"\"}},\"formatting_flags\":[{\"issue\":\"\",\"severity\":\"HIGH\",\"fix\":\"\"}],\"weak_sections\":[],\"overall_recommendation\":\"\"}\n\nJD: ${data.jd}\nSUMMARY: ${(data.sections?.summary||'').substring(0,500)}\nEXPERIENCE: ${(data.sections?.experience||'').substring(0,800)}\nSKILLS: ${(data.sections?.skills||'').substring(0,500)}\nPROJECTS: ${(data.sections?.projects||'').substring(0,500)}`;\n\nconst body = {\n  model: \"qwen2.5:3b\",\n  max_tokens: 1500,\n  temperature: 0.1,\n  stream: false,\n  messages: [\n    { role: \"system\", content: \"You are an ATS expert. Return only valid JSON, no markdown, no explanation.\" },\n    { role: \"user\", content: prompt }\n  ]\n};\nreturn [{ json: { ...data, _ollamaBody: JSON.stringify(body) } }];"
       },
       "id": "dcc1f2e7-83dc-4a0f-adf9-441c96b56294",
-      "name": "Gemini: ATS Analysis [Builder]",
+      "name": "Qwen: ATS Analysis [Builder]",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -1151,7 +1151,7 @@
         }
       },
       "id": "7cf2d3fe-8dea-4354-8013-521e4d0d85c6",
-      "name": "Projects: gemini-2.0-flash",
+      "name": "Projects: qwen2.5:3b (v2)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -1237,7 +1237,7 @@
         }
       },
       "id": "cc215296-d692-419e-9273-197e3792df22",
-      "name": "groq: Ground Truth Verification",
+      "name": "Qwen: Ground Truth Verification",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -1542,91 +1542,91 @@
       "main": [
         [
           {
-            "node": "Summary: llama-70b [Builder]",
+            "node": "Summary: qwen2.5:3b (v1) [Builder]",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Summary: llama-70b": {
+    "Summary: qwen2.5:3b (v1)": {
       "main": [
         [
           {
-            "node": "Summary: gemini-2.0-flash [Builder]",
+            "node": "Summary: qwen2.5:3b (v2) [Builder]",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Summary: gemini-2.0-flash": {
+    "Summary: qwen2.5:3b (v2)": {
       "main": [
         [
           {
-            "node": "Experience: llama-70b [Builder]",
+            "node": "Experience: qwen2.5:3b (v1) [Builder]",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Experience: llama-70b": {
+    "Experience: qwen2.5:3b (v1)": {
       "main": [
         [
           {
-            "node": "Experience: gemini-2.0-flash [Builder]",
+            "node": "Experience: qwen2.5:3b (v2) [Builder]",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Experience: gemini-2.0-flash": {
+    "Experience: qwen2.5:3b (v2)": {
       "main": [
         [
           {
-            "node": "Skills: llama-70b [Builder]",
+            "node": "Skills: qwen2.5:3b (v1) [Builder]",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Skills: llama-70b": {
+    "Skills: qwen2.5:3b (v1)": {
       "main": [
         [
           {
-            "node": "Skills: gemini-2.0-flash [Builder]",
+            "node": "Skills: qwen2.5:3b (v2) [Builder]",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Skills: gemini-2.0-flash": {
+    "Skills: qwen2.5:3b (v2)": {
       "main": [
         [
           {
-            "node": "Projects: llama-70b [Builder]",
+            "node": "Projects: qwen2.5:3b (v1) [Builder]",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Projects: llama-70b": {
+    "Projects: qwen2.5:3b (v1)": {
       "main": [
         [
           {
-            "node": "Projects: gemini-2.0-flash [Builder]",
+            "node": "Projects: qwen2.5:3b (v2) [Builder]",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Cover Letter: gemini (humanized)": {
+    "Cover Letter: qwen2.5:3b (humanized)": {
       "main": [
         [
           {
@@ -1668,7 +1668,7 @@
       "main": [
         [
           {
-            "node": "Gemini: Ground Truth Verification [Builder]",
+            "node": "Qwen: Ground Truth Verification [Builder]",
             "type": "main",
             "index": 0
           }
@@ -1746,7 +1746,7 @@
             "index": 0
           },
           {
-            "node": "Gemini: ATS Analysis [Builder]",
+            "node": "Qwen: ATS Analysis [Builder]",
             "type": "main",
             "index": 0
           },
@@ -1860,51 +1860,51 @@
         ]
       ]
     },
-    "Summary: llama-70b [Builder]": {
+    "Summary: qwen2.5:3b (v1) [Builder]": {
       "main": [
         [
           {
-            "node": "Summary: llama-70b",
+            "node": "Summary: qwen2.5:3b (v1)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Experience: llama-70b [Builder]": {
+    "Experience: qwen2.5:3b (v1) [Builder]": {
       "main": [
         [
           {
-            "node": "Experience: llama-70b",
+            "node": "Experience: qwen2.5:3b (v1)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Skills: llama-70b [Builder]": {
+    "Skills: qwen2.5:3b (v1) [Builder]": {
       "main": [
         [
           {
-            "node": "Skills: llama-70b",
+            "node": "Skills: qwen2.5:3b (v1)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Projects: llama-70b [Builder]": {
+    "Projects: qwen2.5:3b (v1) [Builder]": {
       "main": [
         [
           {
-            "node": "Projects: llama-70b",
+            "node": "Projects: qwen2.5:3b (v1)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Cover Letter: gemini (humanized) [Builder]": {
+    "Cover Letter: qwen2.5:3b (humanized) [Builder]": {
       "main": [
         [
           {
@@ -1948,7 +1948,7 @@
         ]
       ]
     },
-    "Gemini: Ground Truth Verification [Builder]": {
+    "Qwen: Ground Truth Verification [Builder]": {
       "main": [
         [
           {
@@ -1959,7 +1959,7 @@
         ]
       ]
     },
-    "Gemini: ATS Analysis [Builder]": {
+    "Qwen: ATS Analysis [Builder]": {
       "main": [
         [
           {
@@ -1970,62 +1970,62 @@
         ]
       ]
     },
-    "Summary: gemini-2.0-flash [Builder]": {
+    "Summary: qwen2.5:3b (v2) [Builder]": {
       "main": [
         [
           {
-            "node": "Summary: gemini-2.0-flash",
+            "node": "Summary: qwen2.5:3b (v2)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Experience: gemini-2.0-flash [Builder]": {
+    "Experience: qwen2.5:3b (v2) [Builder]": {
       "main": [
         [
           {
-            "node": "Experience: gemini-2.0-flash",
+            "node": "Experience: qwen2.5:3b (v2)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Skills: gemini-2.0-flash [Builder]": {
+    "Skills: qwen2.5:3b (v2) [Builder]": {
       "main": [
         [
           {
-            "node": "Skills: gemini-2.0-flash",
+            "node": "Skills: qwen2.5:3b (v2)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Projects: gemini-2.0-flash [Builder]": {
+    "Projects: qwen2.5:3b (v2) [Builder]": {
       "main": [
         [
           {
-            "node": "Projects: gemini-2.0-flash",
+            "node": "Projects: qwen2.5:3b (v2)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Projects: gemini-2.0-flash": {
+    "Projects: qwen2.5:3b (v2)": {
       "main": [
         [
           {
-            "node": "Cover Letter: gemini (humanized) [Builder]",
+            "node": "Cover Letter: qwen2.5:3b (humanized) [Builder]",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Gemini: ATS Analysis": {
+    "ATS Analysis (Deterministic)": {
       "main": [
         [
           {
@@ -2069,7 +2069,7 @@
         ]
       ]
     },
-    "groq: Ground Truth Verification": {
+    "Qwen: Ground Truth Verification": {
       "main": [
         [
           {
@@ -2106,7 +2106,7 @@
       "main": [
         [
           {
-            "node": "groq: Ground Truth Verification",
+            "node": "Qwen: Ground Truth Verification",
             "type": "main",
             "index": 0
           }
@@ -2128,7 +2128,7 @@
       "main": [
         [
           {
-            "node": "Cover Letter: gemini (humanized)",
+            "node": "Cover Letter: qwen2.5:3b (humanized)",
             "type": "main",
             "index": 0
           }
@@ -2161,7 +2161,7 @@
       "main": [
         [
           {
-            "node": "Gemini: ATS Analysis",
+            "node": "ATS Analysis (Deterministic)",
             "type": "main",
             "index": 0
           }
