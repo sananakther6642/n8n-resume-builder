@@ -72,7 +72,7 @@ n8n available at `http://localhost:5678`.
 │   ├── latex-service-Dockerfile             # Alternate Dockerfile
 │   ├── server.js                            # LaTeX compile + PDF→PNG server
 │   └── latex-service-server.js             # Alternate server entry
-└── AI Resume Tailor v7 — Hybrid ...json    # n8n workflow export
+└── Resume_Tailor_v.json    # n8n workflow export
 ```
 
 ## Notes
